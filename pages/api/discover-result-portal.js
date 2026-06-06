@@ -7,11 +7,44 @@ import {
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
 
+function isCurrentYearResultCandidate(candidate, targetYear) {
+  if (!candidate) return false;
+
+  const hay = `${candidate.href || ""} ${candidate.label || ""}`.toLowerCase();
+  const year = String(targetYear || "").toLowerCase();
+
+  const hasCurrentYear =
+    hay.includes(year) ||
+    hay.includes("2025-26") ||
+    hay.includes("result26") ||
+    hay.includes("results-2025-26") ||
+    hay.includes("result-2025-26") ||
+    hay.includes("result -2025-26");
+
+  const hasResultSignal =
+    hay.includes("result") ||
+    hay.includes("results.aspx") ||
+    hay.includes("nep_result.aspx");
+
+  const oldYear =
+    hay.includes("2024-25") ||
+    hay.includes("2023-24") ||
+    hay.includes("2022-23") ||
+    hay.includes("2021-22") ||
+    hay.includes("result25") ||
+    hay.includes("result24") ||
+    hay.includes("result23") ||
+    hay.includes("result22");
+
+  return hasCurrentYear && hasResultSignal && !oldYear;
+}
+
 export default async function handler(req, res) {
   try {
     requireCron(req);
 
-    const mainPortalUrl = process.env.MAIN_EXAM_PORTAL || "https://shekhauniexam.in/";
+    const mainPortalUrl =
+      process.env.MAIN_EXAM_PORTAL || "https://shekhauniexam.in/";
     const targetYear = process.env.TARGET_RESULT_YEAR || "2025-26";
 
     const response = await fetch(mainPortalUrl, {
@@ -28,7 +61,11 @@ export default async function handler(req, res) {
       targetYear
     );
 
-    const top = candidates[0] || null;
+    const currentYearCandidates = candidates.filter((candidate) =>
+      isCurrentYearResultCandidate(candidate, targetYear)
+    );
+
+    const top = currentYearCandidates[0] || null;
 
     const sourceRef = db.collection("result_sources").doc("pdusu_main");
     const sourceSnap = await sourceRef.get();
@@ -38,14 +75,14 @@ export default async function handler(req, res) {
       mainPortalUrl,
       targetYear,
       candidates: candidates.slice(0, 20),
-      status: top ? "candidate_found" : "discovering",
+      currentYearCandidates: currentYearCandidates.slice(0, 10),
       lastCheckedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     };
 
     let newlyFound = false;
 
-    if (top && top.score >= 20) {
+    if (top) {
       const urls = derivePortalUrls(top.href);
 
       update.activeResultBaseUrl = urls.activeResultBaseUrl;
@@ -57,6 +94,11 @@ export default async function handler(req, res) {
         newlyFound = true;
         update.lastFoundAt = FieldValue.serverTimestamp();
       }
+    } else {
+      update.status = "discovering";
+      update.activeResultBaseUrl = old.activeResultBaseUrl || "";
+      update.activeResultsPageUrl = old.activeResultsPageUrl || "";
+      update.activeNepResultUrl = old.activeNepResultUrl || "";
     }
 
     await sourceRef.set(update, {
@@ -66,17 +108,22 @@ export default async function handler(req, res) {
     await logEvent(
       "portal_discovery",
       "info",
-      top ? "Result portal candidate found" : "No candidate found",
+      top
+        ? "Current year result portal found"
+        : "No current year result portal found yet",
       {
         top,
-        count: candidates.length
+        totalCandidates: candidates.length,
+        currentYearCandidates: currentYearCandidates.length
       }
     );
 
     if (newlyFound) {
       await sendTelegramMessage({
-        chatId: process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_PUBLIC_CHAT_ID,
-        text: `⚠️ <b>New result portal candidate detected</b>\n\n${top.href}\n\nLabel: ${
+        chatId:
+          process.env.TELEGRAM_ADMIN_CHAT_ID ||
+          process.env.TELEGRAM_PUBLIC_CHAT_ID,
+        text: `⚠️ <b>New 2025-26 result portal detected</b>\n\n${top.href}\n\nLabel: ${
           top.label || "N/A"
         }\nScore: ${top.score}\n\nPlease verify in admin panel.`
       });
@@ -86,6 +133,7 @@ export default async function handler(req, res) {
       success: true,
       status: update.status,
       top,
+      currentYearCandidates: currentYearCandidates.slice(0, 10),
       candidates: candidates.slice(0, 10)
     });
   } catch (err) {
