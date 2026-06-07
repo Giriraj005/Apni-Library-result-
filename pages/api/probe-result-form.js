@@ -1,12 +1,41 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
-import {
-  detectResultStatus,
-  submitAspNetResultForm
-} from "../../lib/resultParser";
 import { createQueueForBatch } from "../../lib/resultQueue";
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
+
+async function callWorker({ formUrl, yearPart, resultType, rollNo }) {
+  if (!process.env.WORKER_URL) {
+    throw new Error("WORKER_URL missing in Vercel env");
+  }
+
+  if (!process.env.WORKER_SECRET) {
+    throw new Error("WORKER_SECRET missing in Vercel env");
+  }
+
+  const response = await fetch(`${process.env.WORKER_URL}/fetch-result`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-worker-secret": process.env.WORKER_SECRET
+    },
+    body: JSON.stringify({
+      formUrl,
+      yearPart,
+      resultType,
+      rollNo,
+      sendTelegram: false
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || "Worker probe failed");
+  }
+
+  return data;
+}
 
 export default async function handler(req, res) {
   try {
@@ -17,7 +46,7 @@ export default async function handler(req, res) {
     const formUrl = source.activeNepResultUrl;
 
     if (!formUrl) {
-      await logEvent("form_probe", "warn", "No active NEP result form URL found", {});
+      await logEvent("form_probe", "warn", "No active result form URL found", {});
       return res.status(200).json({
         success: true,
         status: "no_form_url"
@@ -46,29 +75,29 @@ export default async function handler(req, res) {
       const probe = doc.data();
 
       try {
-        const out = await submitAspNetResultForm({
+        const workerResult = await callWorker({
           formUrl,
           yearPart: probe.yearPart,
           resultType: probe.resultType || "MAIN",
           rollNo: probe.rollNo
         });
 
-        const status = detectResultStatus(out.html, probe.rollNo);
-
         results.push({
           id: doc.id,
           rollNo: probe.rollNo,
           yearPart: probe.yearPart,
-          status
+          status: workerResult.status,
+          resultFound: workerResult.resultFound,
+          reason: workerResult.reason
         });
 
-        await logEvent("form_probe", "info", "Probe checked", {
+        await logEvent("form_probe", "info", "Probe checked by worker", {
           rollNo: probe.rollNo,
           yearPart: probe.yearPart,
-          status: status.status
+          status: workerResult.status
         });
 
-        if (status.status === "captcha_detected") {
+        if (workerResult.status === "captcha_detected") {
           await db.collection("result_sources").doc("pdusu_main").set(
             {
               status: "captcha_detected",
@@ -83,12 +112,12 @@ export default async function handler(req, res) {
           break;
         }
 
-        if (status.resultFound) {
+        if (workerResult.resultFound) {
           confirmed = true;
           confirmedProbe = {
             id: doc.id,
             ...probe,
-            status
+            workerResult
           };
           break;
         }
@@ -120,7 +149,7 @@ export default async function handler(req, res) {
           status: "result_confirmed_live",
           resultConfirmed: true,
           confirmedAt: FieldValue.serverTimestamp(),
-          confirmedBy: "form_probe",
+          confirmedBy: "worker_form_probe",
           confirmedProbe
         },
         {
@@ -147,7 +176,7 @@ export default async function handler(req, res) {
         });
       }
 
-      await logEvent("form_probe", "warn", "Result confirmed live by form probe", {
+      await logEvent("form_probe", "warn", "Result confirmed live by worker probe", {
         confirmedProbe,
         queue
       });
