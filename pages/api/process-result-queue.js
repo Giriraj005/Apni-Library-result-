@@ -1,19 +1,43 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
-import {
-  detectResultStatus,
-  submitAspNetResultForm
-} from "../../lib/resultParser";
 import { makeResultEventKey } from "../../lib/resultQueue";
-import {
-  resultCaption,
-  sendTelegramMessage,
-  sendTelegramPhoto
-} from "../../lib/telegram";
 import { logEvent } from "../../lib/logger";
 
-const BATCH_SIZE = 15;
+const BATCH_SIZE = 10;
 const MAX_ATTEMPTS = 3;
+
+async function callWorker({ formUrl, yearPart, resultType, rollNo }) {
+  if (!process.env.WORKER_URL) {
+    throw new Error("WORKER_URL missing in Vercel env");
+  }
+
+  if (!process.env.WORKER_SECRET) {
+    throw new Error("WORKER_SECRET missing in Vercel env");
+  }
+
+  const response = await fetch(`${process.env.WORKER_URL}/fetch-result`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-worker-secret": process.env.WORKER_SECRET
+    },
+    body: JSON.stringify({
+      formUrl,
+      yearPart,
+      resultType,
+      rollNo,
+      sendTelegram: true
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || "Worker fetch failed");
+  }
+
+  return data;
+}
 
 export default async function handler(req, res) {
   try {
@@ -59,10 +83,12 @@ export default async function handler(req, res) {
       const item = doc.data();
       processed += 1;
 
+      const nextAttempt = (item.attempts || 0) + 1;
+
       await doc.ref.set(
         {
           status: "checking",
-          attempts: (item.attempts || 0) + 1,
+          attempts: nextAttempt,
           updatedAt: FieldValue.serverTimestamp()
         },
         {
@@ -71,16 +97,14 @@ export default async function handler(req, res) {
       );
 
       try {
-        const out = await submitAspNetResultForm({
+        const workerResult = await callWorker({
           formUrl,
           yearPart: item.yearPart,
           resultType: item.resultType || "MAIN",
           rollNo: item.rollNo
         });
 
-        const status = detectResultStatus(out.html, item.rollNo);
-
-        if (status.status === "captcha_detected") {
+        if (workerResult.status === "captcha_detected") {
           await db.collection("result_sources").doc("pdusu_main").set(
             {
               automaticCheckingPaused: true,
@@ -92,14 +116,14 @@ export default async function handler(req, res) {
             }
           );
 
-          await logEvent("queue", "error", "CAPTCHA detected, automatic checking paused", {
+          await logEvent("queue", "error", "CAPTCHA detected by worker", {
             queueId: doc.id
           });
 
           break;
         }
 
-        if (status.resultFound) {
+        if (workerResult.resultFound) {
           const resultId = makeResultEventKey({
             rollNo: item.rollNo,
             yearPart: item.yearPart,
@@ -107,52 +131,19 @@ export default async function handler(req, res) {
             targetYear: process.env.TARGET_RESULT_YEAR
           });
 
-          const outputRef = db.collection("result_outputs").doc(resultId);
-          const outputSnap = await outputRef.get();
-          const alreadySent = outputSnap.exists && outputSnap.data().telegramSent;
-
-          let telegramResult = null;
-
-          const caption = resultCaption({
-            rollNo: item.rollNo,
-            yearPart: item.yearPart,
-            resultType: item.resultType,
-            fetchedAt: new Date().toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata"
-            })
-          });
-
-          if (!alreadySent) {
-            const screenshotUrl = outputSnap.exists ? outputSnap.data().screenshotUrl : "";
-
-            if (screenshotUrl) {
-              telegramResult = await sendTelegramPhoto({
-                chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
-                photoUrl: screenshotUrl,
-                caption
-              });
-            } else {
-              telegramResult = await sendTelegramMessage({
-                chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
-                text: `${caption}\n\n<b>Preview Text:</b>\n${escapeTelegram(
-                  status.textPreview.slice(0, 2500)
-                )}\n\n⚠️ Screenshot worker not attached yet. Text preview sent.`
-              });
-            }
-          }
-
-          await outputRef.set(
+          await db.collection("result_outputs").doc(resultId).set(
             {
               rollNo: item.rollNo,
               yearPart: item.yearPart,
               resultType: item.resultType || "MAIN",
-              resultText: status.fullText || status.textPreview,
-              textPreview: status.textPreview,
-              screenshotUrl: outputSnap.exists ? outputSnap.data().screenshotUrl || "" : "",
+              resultText: workerResult.textPreview || "",
+              textPreview: workerResult.textPreview || "",
               officialUrl: formUrl,
-              telegramSent: true,
-              telegramSentAt: FieldValue.serverTimestamp(),
-              telegramMessageId: telegramResult?.message_id || null,
+              telegramSent: Boolean(workerResult.telegramSent),
+              telegramSentAt: workerResult.telegramSent
+                ? FieldValue.serverTimestamp()
+                : null,
+              telegramMessageId: workerResult.telegramMessageId || null,
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
             },
@@ -179,9 +170,11 @@ export default async function handler(req, res) {
                 status: "result_found",
                 resultFound: true,
                 resultId,
-                telegramSent: true,
-                telegramSentAt: FieldValue.serverTimestamp(),
-                telegramMessageId: telegramResult?.message_id || null,
+                telegramSent: Boolean(workerResult.telegramSent),
+                telegramSentAt: workerResult.telegramSent
+                  ? FieldValue.serverTimestamp()
+                  : null,
+                telegramMessageId: workerResult.telegramMessageId || null,
                 updatedAt: FieldValue.serverTimestamp()
               },
               {
@@ -192,15 +185,15 @@ export default async function handler(req, res) {
 
           found += 1;
         } else {
-          const attempts = (item.attempts || 0) + 1;
-          const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+          const finalStatus =
+            nextAttempt >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
           await doc.ref.set(
             {
               status: finalStatus,
               resultFound: false,
-              lastError: status.reason,
-              lastTextPreview: status.textPreview,
+              lastError: workerResult.reason || workerResult.status,
+              lastTextPreview: workerResult.textPreview || "",
               updatedAt: FieldValue.serverTimestamp()
             },
             {
@@ -225,8 +218,8 @@ export default async function handler(req, res) {
       } catch (err) {
         failed += 1;
 
-        const attempts = (item.attempts || 0) + 1;
-        const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+        const finalStatus =
+          nextAttempt >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
         await doc.ref.set(
           {
@@ -245,7 +238,7 @@ export default async function handler(req, res) {
       }
     }
 
-    await logEvent("queue", "info", "Queue processing completed", {
+    await logEvent("queue", "info", "Queue processing completed by worker", {
       processed,
       found,
       failed
@@ -261,11 +254,4 @@ export default async function handler(req, res) {
     await logEvent("queue", "error", err.message, {});
     return safeJsonError(res, err);
   }
-}
-
-function escapeTelegram(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
