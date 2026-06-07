@@ -36,7 +36,40 @@ function isCurrentYearResultCandidate(candidate, targetYear) {
     hay.includes("result23") ||
     hay.includes("result22");
 
-  return hasCurrentYear && hasResultSignal && !oldYear;
+  const blocked =
+    hay.includes("practical") ||
+    hay.includes("admit card") ||
+    hay.includes("login.aspx") ||
+    hay.includes("marks entry") ||
+    hay.includes("exam form");
+
+  return hasCurrentYear && hasResultSignal && !oldYear && !blocked;
+}
+
+function buildTelegramAlert(top, urls) {
+  return [
+    "🎓 <b>PDUSU Result 2025-26 Portal Detected</b>",
+    "",
+    "University ki official exam site par 2025-26 result portal/link detect hua hai.",
+    "",
+    `<b>Title:</b> ${top.label || "Result 2025-26"}`,
+    "",
+    `<b>Open Official Result Link:</b>`,
+    top.href,
+    "",
+    urls?.activeResultsPageUrl
+      ? `<b>Result List Page:</b>\n${urls.activeResultsPageUrl}`
+      : "",
+    urls?.activeNepResultUrl
+      ? `\n<b>NEP Result Form:</b>\n${urls.activeNepResultUrl}`
+      : "",
+    "",
+    "Students apna roll number official portal par check karein.",
+    "",
+    "Source: Official University Result Portal"
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export default async function handler(req, res) {
@@ -81,9 +114,10 @@ export default async function handler(req, res) {
     };
 
     let newlyFound = false;
+    let urls = null;
 
     if (top) {
-      const urls = derivePortalUrls(top.href);
+      urls = derivePortalUrls(top.href);
 
       update.activeResultBaseUrl = urls.activeResultBaseUrl;
       update.activeResultsPageUrl = urls.activeResultsPageUrl;
@@ -118,15 +152,35 @@ export default async function handler(req, res) {
       }
     );
 
-    if (newlyFound) {
-      await sendTelegramMessage({
-        chatId:
-          process.env.TELEGRAM_ADMIN_CHAT_ID ||
-          process.env.TELEGRAM_PUBLIC_CHAT_ID,
-        text: `⚠️ <b>New 2025-26 result portal detected</b>\n\n${top.href}\n\nLabel: ${
-          top.label || "N/A"
-        }\nScore: ${top.score}\n\nPlease verify in admin panel.`
-      });
+    if (newlyFound && top && urls) {
+      const alertId = `result_portal_alert_${targetYear.replace(/[^a-z0-9]/gi, "_")}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
+      const alertRef = db.collection("result_seen_events").doc(alertId);
+      const alertSnap = await alertRef.get();
+
+      if (!alertSnap.exists) {
+        const msg = buildTelegramAlert(top, urls);
+
+        await sendTelegramMessage({
+          chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+          text: msg
+        });
+
+        await alertRef.set({
+          type: "result_portal_public_alert",
+          targetYear,
+          href: top.href,
+          label: top.label || "",
+          urls,
+          sent: true,
+          createdAt: FieldValue.serverTimestamp()
+        });
+
+        await logEvent("portal_discovery", "warn", "Public result portal alert sent", {
+          href: top.href,
+          label: top.label,
+          urls
+        });
+      }
     }
 
     return res.status(200).json({
