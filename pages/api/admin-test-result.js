@@ -1,19 +1,46 @@
-import { db } from "../../lib/firebaseAdmin";
 import { requireAdmin, safeJsonError } from "../../lib/security";
-import {
-  detectResultStatus,
-  submitAspNetResultForm
-} from "../../lib/resultParser";
 import { logEvent } from "../../lib/logger";
+
+async function callWorker({ formUrl, yearPart, resultType, rollNo, sendTelegram }) {
+  if (!process.env.WORKER_URL) {
+    throw new Error("WORKER_URL missing in Vercel env");
+  }
+
+  if (!process.env.WORKER_SECRET) {
+    throw new Error("WORKER_SECRET missing in Vercel env");
+  }
+
+  const response = await fetch(`${process.env.WORKER_URL}/fetch-result`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-worker-secret": process.env.WORKER_SECRET
+    },
+    body: JSON.stringify({
+      formUrl,
+      yearPart,
+      resultType,
+      rollNo,
+      sendTelegram
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || "Worker result fetch failed");
+  }
+
+  return data;
+}
 
 export default async function handler(req, res) {
   try {
     requireAdmin(req);
 
-    const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
-    const source = sourceSnap.exists ? sourceSnap.data() : {};
+    const formUrl =
+      req.body?.resultFormUrl || "https://result25.shekhauni.co.in/NEP_RESULT.aspx";
 
-    const formUrl = req.body?.resultFormUrl || source.activeNepResultUrl;
     const yearPart = req.body?.yearPart;
     const resultType = req.body?.resultType || "MAIN";
     const rollNo = req.body?.rollNo;
@@ -25,30 +52,34 @@ export default async function handler(req, res) {
       });
     }
 
-    const out = await submitAspNetResultForm({
-      formUrl,
-      yearPart,
-      resultType,
-      rollNo
-    });
-
-    const status = detectResultStatus(out.html, rollNo);
-
-    await logEvent("admin_test", "info", "Manual result test completed", {
+    const workerResult = await callWorker({
       formUrl,
       yearPart,
       resultType,
       rollNo,
-      status: status.status
+      sendTelegram: true
+    });
+
+    await logEvent("admin_test", "info", "Manual result test completed by worker", {
+      formUrl,
+      yearPart,
+      resultType,
+      rollNo,
+      workerStatus: workerResult.status
     });
 
     return res.status(200).json({
       success: true,
       formUrl,
-      selected: out.selected,
-      resultStatus: status,
-      textPreview: out.text.slice(0, 3000),
-      selectCount: out.selects?.length || 0
+      resultStatus: {
+        status: workerResult.status,
+        resultFound: workerResult.resultFound,
+        reason: workerResult.reason
+      },
+      selected: workerResult.selected,
+      textPreview: workerResult.textPreview,
+      telegramSent: workerResult.telegramSent,
+      telegramMessageId: workerResult.telegramMessageId || null
     });
   } catch (err) {
     return safeJsonError(res, err);
