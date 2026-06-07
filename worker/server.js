@@ -527,14 +527,14 @@ app.get("/", (_req, res) => {
   res.json({
     success: true,
     service: "Apni Library Result Worker",
-    status: "running"
+    status: "running-v2"
   });
 });
 
 app.get("/health", (_req, res) => {
   res.json({
     success: true,
-    status: "healthy"
+    status: "healthy-v2"
   });
 });
 
