@@ -27,7 +27,8 @@ async function callWorker({ formUrl, yearPart, resultType, rollNo }) {
       resultType,
       rollNo,
       sendTelegram: true
-    })
+    }),
+    signal: AbortSignal.timeout(55000)
   });
 
   const data = await response.json();
@@ -91,9 +92,7 @@ export default async function handler(req, res) {
           attempts: nextAttempt,
           updatedAt: FieldValue.serverTimestamp()
         },
-        {
-          merge: true
-        }
+        { merge: true }
       );
 
       try {
@@ -111,9 +110,7 @@ export default async function handler(req, res) {
               status: "captcha_detected",
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           await logEvent("queue", "error", "CAPTCHA detected by worker", {
@@ -147,9 +144,7 @@ export default async function handler(req, res) {
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           await doc.ref.set(
@@ -159,9 +154,7 @@ export default async function handler(req, res) {
               resultId,
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           if (item.registrationId) {
@@ -177,9 +170,7 @@ export default async function handler(req, res) {
                 telegramMessageId: workerResult.telegramMessageId || null,
                 updatedAt: FieldValue.serverTimestamp()
               },
-              {
-                merge: true
-              }
+              { merge: true }
             );
           }
 
@@ -196,9 +187,7 @@ export default async function handler(req, res) {
               lastTextPreview: workerResult.textPreview || "",
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           if (item.registrationId) {
@@ -207,9 +196,7 @@ export default async function handler(req, res) {
                 status: finalStatus,
                 updatedAt: FieldValue.serverTimestamp()
               },
-              {
-                merge: true
-              }
+              { merge: true }
             );
           }
 
@@ -227,9 +214,7 @@ export default async function handler(req, res) {
             lastError: err.message,
             updatedAt: FieldValue.serverTimestamp()
           },
-          {
-            merge: true
-          }
+          { merge: true }
         );
 
         await logEvent("queue", "error", err.message, {
