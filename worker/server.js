@@ -538,6 +538,49 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.get("/check-source", requireWorkerSecret, async (req, res) => {
+  const targetUrl =
+    req.query.url || "https://result25.shekhauni.co.in/NEP_RESULT.aspx";
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+      }
+    });
+
+    const text = await response.text();
+
+    clearTimeout(timeout);
+
+    return res.json({
+      success: true,
+      url: targetUrl,
+      status: response.status,
+      ok: response.ok,
+      textLength: text.length,
+      preview: text.slice(0, 500)
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+
+    return res.status(500).json({
+      success: false,
+      url: targetUrl,
+      error:
+        err.name === "AbortError"
+          ? "Fetch timeout after 12 seconds"
+          : err.message
+    });
+  }
+});
+
 app.get("/test-result", requireWorkerSecret, async (req, res) => {
   try {
     const result = await fetchResultWithBrowser({
