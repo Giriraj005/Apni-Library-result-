@@ -5,7 +5,7 @@ const app = express();
 
 app.use(express.json({ limit: "10mb" }));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 7860;
 
 function requireWorkerSecret(req, res, next) {
   const secret =
@@ -59,21 +59,21 @@ async function gotoWithFallback(page, formUrl) {
     try {
       await page.goto(url, {
         waitUntil: "commit",
-        timeout: 120000
+        timeout: 25000
       });
 
       await page
         .waitForLoadState("domcontentloaded", {
-          timeout: 45000
+          timeout: 8000
         })
         .catch(() => null);
 
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(1000);
 
       const bodyText = await page
         .locator("body")
         .innerText({
-          timeout: 15000
+          timeout: 8000
         })
         .catch(() => "");
 
@@ -433,7 +433,7 @@ async function fetchResultWithBrowser({
 
     const openResult = await gotoWithFallback(page, formUrl);
 
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(800);
 
     const pageTitle = await page.title().catch(() => "");
 
@@ -447,20 +447,20 @@ async function fetchResultWithBrowser({
 
     const rollInput = await fillRollNumber(page, rollNo);
 
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(400);
 
     const clickInfo = await clickShowResult(page);
 
     await page
       .waitForLoadState("domcontentloaded", {
-        timeout: 30000
+        timeout: 12000
       })
       .catch(() => null);
 
-    await page.waitForTimeout(3500);
+    await page.waitForTimeout(1800);
 
     const text = await page.locator("body").innerText({
-      timeout: 20000
+      timeout: 10000
     });
 
     const status = detectResultStatus(text, rollNo);
