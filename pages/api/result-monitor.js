@@ -8,6 +8,27 @@ import { sendTelegramMessage } from "../../lib/telegram";
 const TARGET_COURSES = ["B.A.", "B.SC", "B.COM", "B.B.A.", "B.C.A."];
 const TARGET_SEMESTERS = ["SEMESTER I", "SEMESTER III", "SEMESTER V"];
 
+function buildResultMonitorAlert({ url, strongSignals }) {
+  return [
+    "📢 <b>PDUSU Result Update Detected</b>",
+    "",
+    "Official result listing page par target semester/course related update detect hua hai.",
+    "",
+    strongSignals.length
+      ? `<b>Detected Signals:</b>\n${strongSignals.join("\n")}`
+      : "",
+    "",
+    `<b>Open Official Result Page:</b>`,
+    url,
+    "",
+    "Students official portal par apna roll number check karein.",
+    "",
+    "Source: Official University Result Portal"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export default async function handler(req, res) {
   try {
     requireCron(req);
@@ -15,7 +36,7 @@ export default async function handler(req, res) {
     const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
 
     if (!sourceSnap.exists || !sourceSnap.data().activeResultsPageUrl) {
-      await logEvent("result_monitor", "warn", "No active result listing URL found", {});
+      await logEvent("result_monitor", "info", "No active result listing URL found yet", {});
 
       return res.status(200).json({
         success: true,
@@ -36,11 +57,8 @@ export default async function handler(req, res) {
     const text = stripHtml(html);
     const pageHash = hashText(text);
 
-    const pageRef = db.collection("result_seen_events").doc(`listing_${pageHash}`);
-    const already = await pageRef.get();
-
-    const strongSignals = [];
     const upper = text.toUpperCase();
+    const strongSignals = [];
 
     for (const c of TARGET_COURSES) {
       for (const s of TARGET_SEMESTERS) {
@@ -62,8 +80,12 @@ export default async function handler(req, res) {
       }
     );
 
+    const eventId = `result_listing_${pageHash}`;
+    const eventRef = db.collection("result_seen_events").doc(eventId);
+    const already = await eventRef.get();
+
     if (!already.exists) {
-      await pageRef.set({
+      await eventRef.set({
         type: "result_listing_hash",
         hash: pageHash,
         url,
@@ -83,33 +105,18 @@ export default async function handler(req, res) {
 
       if (strongSignals.length) {
         await sendTelegramMessage({
-          chatId: process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_PUBLIC_CHAT_ID,
-          text: `⚠️ <b>Result listing signal detected</b>\n\nSignals:\n${strongSignals.join(
-            "\n"
-          )}\n\nPublic alert will be sent only after form probe confirms actual result.`
+          chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+          text: buildResultMonitorAlert({
+            url,
+            strongSignals
+          })
         });
-
-        await db.collection("result_expected_batches").doc("ug_nep_sem_i_iii_v_main").set(
-          {
-            title: "UG NEP Semester I III V Main Result 2025-26",
-            active: true,
-            targetYear: process.env.TARGET_RESULT_YEAR || "2025-26",
-            courses: TARGET_COURSES,
-            semesters: ["I", "III", "V"],
-            resultType: "MAIN",
-            status: "result_detected",
-            resultConfirmed: false,
-            updatedAt: FieldValue.serverTimestamp()
-          },
-          {
-            merge: true
-          }
-        );
       }
     }
 
     return res.status(200).json({
       success: true,
+      status: "checked",
       url,
       hash: pageHash,
       changed: !already.exists,
