@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "pages/api/process-result-queue.js": {
+      "maxDuration": 60
+    },
+    "pages/api/result-monitor.js": {
+      "maxDuration": 60
+    },
+    "pages/api/discover-result-portal.js": {
+      "maxDuration": 30
+    },
+    "pages/api/probe-result-form.js": {
+      "maxDuration": 30
+    }
+  }
+}
