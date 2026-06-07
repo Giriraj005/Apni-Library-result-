@@ -34,6 +34,66 @@ function escapeTelegram(value) {
     .replace(/>/g, "&gt;");
 }
 
+function buildFallbackUrls(formUrl) {
+  const urls = [];
+  const original = String(formUrl || "").trim();
+
+  if (original) urls.push(original);
+
+  if (original.startsWith("https://")) {
+    urls.push(original.replace("https://", "http://"));
+  }
+
+  if (original.startsWith("http://")) {
+    urls.push(original.replace("http://", "https://"));
+  }
+
+  return [...new Set(urls)];
+}
+
+async function gotoWithFallback(page, formUrl) {
+  const urls = buildFallbackUrls(formUrl);
+  const errors = [];
+
+  for (const url of urls) {
+    try {
+      await page.goto(url, {
+        waitUntil: "commit",
+        timeout: 120000
+      });
+
+      await page
+        .waitForLoadState("domcontentloaded", {
+          timeout: 45000
+        })
+        .catch(() => null);
+
+      await page.waitForTimeout(2500);
+
+      const bodyText = await page
+        .locator("body")
+        .innerText({
+          timeout: 15000
+        })
+        .catch(() => "");
+
+      if (bodyText && bodyText.length > 20) {
+        return {
+          success: true,
+          finalUrl: url,
+          bodyText
+        };
+      }
+
+      errors.push(`${url}: loaded but empty body`);
+    } catch (err) {
+      errors.push(`${url}: ${err.message}`);
+    }
+  }
+
+  throw new Error(`Could not open result form. Tried: ${errors.join(" | ")}`);
+}
+
 function detectResultStatus(text, rollNo = "") {
   const clean = cleanText(text);
   const lower = clean.toLowerCase();
@@ -131,7 +191,7 @@ async function selectDropdownByLabel(page, index, wantedLabel) {
 
   const wanted = cleanText(wantedLabel).toLowerCase();
 
-  let match =
+  const match =
     options.find((opt) => cleanText(opt.label).toLowerCase() === wanted) ||
     options.find((opt) => cleanText(opt.value).toLowerCase() === wanted) ||
     options.find((opt) =>
@@ -142,7 +202,7 @@ async function selectDropdownByLabel(page, index, wantedLabel) {
     throw new Error(
       `Dropdown option not found: ${wantedLabel}. Available: ${options
         .map((o) => o.label || o.value)
-        .slice(0, 20)
+        .slice(0, 30)
         .join(", ")}`
     );
   }
@@ -350,7 +410,12 @@ async function fetchResultWithBrowser({
 
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--ignore-certificate-errors"
+    ]
   });
 
   let page;
@@ -361,20 +426,19 @@ async function fetchResultWithBrowser({
         width: 1365,
         height: 1600
       },
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
     });
 
-    await page.goto(formUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000
-    });
+    const openResult = await gotoWithFallback(page, formUrl);
 
     await page.waitForTimeout(1200);
 
     const pageTitle = await page.title().catch(() => "");
 
     const yearSelection = await selectDropdownByLabel(page, 0, yearPart);
+
     const resultTypeSelection = await selectDropdownByLabel(
       page,
       1,
@@ -387,9 +451,11 @@ async function fetchResultWithBrowser({
 
     const clickInfo = await clickShowResult(page);
 
-    await page.waitForLoadState("domcontentloaded", {
-      timeout: 30000
-    }).catch(() => null);
+    await page
+      .waitForLoadState("domcontentloaded", {
+        timeout: 30000
+      })
+      .catch(() => null);
 
     await page.waitForTimeout(3500);
 
@@ -442,6 +508,7 @@ async function fetchResultWithBrowser({
       reason: status.reason,
       textPreview: cleanText(text).slice(0, 2500),
       pageTitle,
+      openedUrl: openResult.finalUrl,
       selected: {
         yearSelection,
         resultTypeSelection,
