@@ -5,9 +5,22 @@ import { stripHtml } from "../../lib/resultParser";
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
 import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
+import {
+  OFFICIAL_MAIN_PORTAL,
+  RESULT26_DIRECT_LINKS,
+  validateDirectResultForms
+} from "../../lib/resultLinkValidator";
 
 const TARGET_COURSES = ["B.A.", "B.SC", "B.COM", "B.B.A.", "B.C.A."];
 const TARGET_SEMESTERS = ["SEMESTER I", "SEMESTER III", "SEMESTER V"];
+
+function cleanId(value) {
+  return String(value || "")
+    .replace(/[^a-z0-9]/gi, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+}
 
 function buildWhatsAppShareLink(message) {
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
@@ -43,10 +56,10 @@ function buildResultMonitorAlert({ url, strongSignals }) {
       ? `<b>Detected Signals:</b>\n${strongSignals.join("\n")}`
       : "",
     "",
-    `<b>Open Official Result Page:</b>`,
+    "<b>Open Official Result Page:</b>",
     url,
     "",
-    `<b>WhatsApp Share:</b>`,
+    "<b>WhatsApp Share:</b>",
     shareLink,
     "",
     "Students official portal par apna roll number check karein.",
@@ -57,23 +70,220 @@ function buildResultMonitorAlert({ url, strongSignals }) {
     .join("\n");
 }
 
+function buildDirectFormPlainMessage(form) {
+  return [
+    `${form.alertTitle || form.label} Active`,
+    "",
+    `${form.label} official result link active ho gaya hai.`,
+    "",
+    `Direct Result Link: ${form.url}`,
+    "",
+    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
+    "",
+    "Students अपना course/semester select करके roll number से result check करें।",
+    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
+    "",
+    "Source: Official University Result Portal"
+  ].join("\n");
+}
+
+function buildDirectFormTelegramAlert(form) {
+  const plain = buildDirectFormPlainMessage(form);
+  const shareLink = buildWhatsAppShareLink(plain);
+
+  return [
+    `🎓 <b>${form.alertTitle || form.label} Active</b>`,
+    "",
+    `${form.label} official result link active ho gaya hai.`,
+    "",
+    "<b>Direct Result Link:</b>",
+    form.url,
+    "",
+    "<b>Official Main Portal:</b>",
+    OFFICIAL_MAIN_PORTAL,
+    "",
+    "Students अपना course/semester select करके roll number से result check करें।",
+    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
+    "",
+    "<b>WhatsApp Share:</b>",
+    shareLink,
+    "",
+    "Source: Official University Result Portal"
+  ].join("\n");
+}
+
+function makePortalAlertId(targetYear, activeResultBaseUrl) {
+  return `result_portal_alert_${cleanId(targetYear)}_${cleanId(
+    activeResultBaseUrl || RESULT26_DIRECT_LINKS.resultBaseUrl
+  )}`;
+}
+
+function makeDirectFormAlertId(targetYear, form) {
+  return `result_direct_form_alert_${cleanId(targetYear)}_${cleanId(
+    form.type
+  )}_${cleanId(form.url)}`;
+}
+
+async function sendDirectFormAlert({
+  targetYear,
+  form,
+  genericPortalAlertAlreadySent
+}) {
+  const alertId = makeDirectFormAlertId(targetYear, form);
+  const alertRef = db.collection("result_seen_events").doc(alertId);
+  const alertSnap = await alertRef.get();
+
+  if (alertSnap.exists && alertSnap.data()?.sent) {
+    return {
+      type: form.type,
+      label: form.label,
+      url: form.url,
+      sent: false,
+      alreadySent: true,
+      suppressed: false,
+      telegramMessageId: alertSnap.data()?.telegramMessageId || null,
+      whatsapp: alertSnap.data()?.whatsapp || null
+    };
+  }
+
+  /*
+    Migration safety:
+    PG alert already went from old generic portal alert.
+    Do not send PG again after this new split-alert system deploys.
+    UG must still send when it becomes valid.
+  */
+  if (form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
+    await alertRef.set(
+      {
+        type: "result_direct_form_alert",
+        formType: form.type,
+        label: form.label,
+        url: form.url,
+        targetYear,
+        sent: true,
+        suppressed: true,
+        reason: "pg_already_covered_by_old_portal_alert",
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      {
+        merge: true
+      }
+    );
+
+    return {
+      type: form.type,
+      label: form.label,
+      url: form.url,
+      sent: false,
+      alreadySent: false,
+      suppressed: true,
+      reason: "pg_already_covered_by_old_portal_alert",
+      telegramMessageId: null,
+      whatsapp: null
+    };
+  }
+
+  const telegram = await sendTelegramMessage({
+    chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+    text: buildDirectFormTelegramAlert(form)
+  });
+
+  let whatsapp = null;
+
+  try {
+    whatsapp = await sendWhatsAppResultAlertToAdmins({
+      title: form.alertTitle || form.label,
+      link: form.url
+    });
+  } catch (err) {
+    whatsapp = {
+      success: false,
+      error: err.message
+    };
+  }
+
+  const telegramMessageId = telegram?.message_id || null;
+
+  await alertRef.set(
+    {
+      type: "result_direct_form_alert",
+      formType: form.type,
+      label: form.label,
+      url: form.url,
+      targetYear,
+      valid: true,
+      status: form.status || null,
+      reason: form.reason || "",
+      telegramSent: true,
+      telegramMessageId,
+      whatsapp,
+      sent: true,
+      suppressed: false,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    {
+      merge: true
+    }
+  );
+
+  await logEvent("result_monitor", "warn", "Direct result form alert sent", {
+    formType: form.type,
+    label: form.label,
+    url: form.url,
+    telegramMessageId,
+    whatsapp
+  });
+
+  return {
+    type: form.type,
+    label: form.label,
+    url: form.url,
+    sent: true,
+    alreadySent: false,
+    suppressed: false,
+    telegramMessageId,
+    whatsapp
+  };
+}
+
 export default async function handler(req, res) {
   try {
     requireCron(req);
 
+    const targetYear = process.env.TARGET_RESULT_YEAR || "2025-26";
+
     const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
 
-    if (!sourceSnap.exists || !sourceSnap.data().activeResultsPageUrl) {
-      await logEvent("result_monitor", "info", "No active result listing URL found yet", {});
+    const source = sourceSnap.exists ? sourceSnap.data() : {};
+    const url = source.activeResultsPageUrl || RESULT26_DIRECT_LINKS.resultListUrl;
+    const activeResultBaseUrl =
+      source.activeResultBaseUrl || RESULT26_DIRECT_LINKS.resultBaseUrl;
 
-      return res.status(200).json({
-        success: true,
-        status: "no_active_portal"
+    const portalAlertId = makePortalAlertId(targetYear, activeResultBaseUrl);
+    const portalAlertSnap = await db
+      .collection("result_seen_events")
+      .doc(portalAlertId)
+      .get();
+
+    const genericPortalAlertAlreadySent =
+      portalAlertSnap.exists && portalAlertSnap.data()?.sent;
+
+    const directFormValidations = await validateDirectResultForms();
+    const validDirectForms = directFormValidations.filter((item) => item.valid);
+
+    const directFormAlertResults = [];
+
+    for (const form of validDirectForms) {
+      const result = await sendDirectFormAlert({
+        targetYear,
+        form,
+        genericPortalAlertAlreadySent
       });
-    }
 
-    const source = sourceSnap.data();
-    const url = source.activeResultsPageUrl;
+      directFormAlertResults.push(result);
+    }
 
     const response = await fetch(url, {
       headers: {
@@ -101,38 +311,56 @@ export default async function handler(req, res) {
         lastResultListingHash: pageHash,
         lastResultListingCheckedAt: FieldValue.serverTimestamp(),
         lastResultListingUrl: url,
-        lastStrongSignals: strongSignals
+        lastStrongSignals: strongSignals,
+        directFormValidations,
+        lastDirectFormAlertResults: directFormAlertResults,
+        updatedAt: FieldValue.serverTimestamp()
       },
       {
         merge: true
       }
     );
 
-    const eventId = `result_listing_${pageHash}`;
+    const eventId = strongSignals.length
+      ? `result_listing_signal_${cleanId(pageHash)}`
+      : `result_listing_hash_${cleanId(pageHash)}`;
+
     const eventRef = db.collection("result_seen_events").doc(eventId);
     const already = await eventRef.get();
 
     let whatsapp = null;
+    let telegramSent = false;
 
     if (!already.exists) {
       await eventRef.set({
-        type: "result_listing_hash",
+        type: strongSignals.length
+          ? "result_listing_signal"
+          : "result_listing_hash",
         hash: pageHash,
         url,
         strongSignals,
+        directFormValidations,
+        directFormAlertResults,
         createdAt: FieldValue.serverTimestamp()
       });
 
       await logEvent(
         "result_monitor",
         strongSignals.length ? "warn" : "info",
-        "Result listing page changed",
+        "Result listing page checked/changed",
         {
           url,
-          strongSignals
+          strongSignals,
+          directFormValidations,
+          directFormAlertResults
         }
       );
 
+      /*
+        Listing alert only goes when strong signal exists.
+        Hash-only changes are stored but do not send alert.
+        This prevents false spam due to ASP.NET ViewState/session changes.
+      */
       if (strongSignals.length) {
         await sendTelegramMessage({
           chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
@@ -141,6 +369,8 @@ export default async function handler(req, res) {
             strongSignals
           })
         });
+
+        telegramSent = true;
 
         try {
           whatsapp = await sendWhatsAppResultAlertToAdmins({
@@ -156,8 +386,9 @@ export default async function handler(req, res) {
 
         await eventRef.set(
           {
-            telegramSent: true,
+            telegramSent,
             whatsapp,
+            sent: true,
             updatedAt: FieldValue.serverTimestamp()
           },
           {
@@ -174,10 +405,13 @@ export default async function handler(req, res) {
       hash: pageHash,
       changed: !already.exists,
       strongSignals,
+      directFormValidations,
+      directFormAlertResults,
+      telegramSent,
       whatsapp
     });
   } catch (err) {
     await logEvent("result_monitor", "error", err.message, {});
     return safeJsonError(res, err);
   }
-}
+          }
