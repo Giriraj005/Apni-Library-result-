@@ -79,7 +79,7 @@ function buildTelegramAlert(top, urls) {
     "",
     `<b>Title:</b> ${top.label || "Result 2025-26"}`,
     "",
-    `<b>Open Official Result Link:</b>`,
+    "<b>Open Official Result Link:</b>",
     top.href,
     "",
     urls?.activeResultsPageUrl
@@ -89,7 +89,7 @@ function buildTelegramAlert(top, urls) {
       ? `\n<b>NEP Result Form:</b>\n${urls.activeNepResultUrl}`
       : "",
     "",
-    `<b>WhatsApp Share:</b>`,
+    "<b>WhatsApp Share:</b>",
     shareLink,
     "",
     "Students apna roll number official portal par check karein.",
@@ -98,6 +98,13 @@ function buildTelegramAlert(top, urls) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function makeAlertId(targetYear, urls) {
+  return `result_portal_alert_${targetYear.replace(
+    /[^a-z0-9]/gi,
+    "_"
+  )}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
 }
 
 export default async function handler(req, res) {
@@ -141,8 +148,11 @@ export default async function handler(req, res) {
       updatedAt: FieldValue.serverTimestamp()
     };
 
-    let newlyFound = false;
     let urls = null;
+    let telegramSent = false;
+    let telegramMessageId = null;
+    let whatsapp = null;
+    let alertAlreadySent = false;
 
     if (top) {
       urls = derivePortalUrls(top.href);
@@ -153,7 +163,6 @@ export default async function handler(req, res) {
       update.status = "portal_found";
 
       if (old.activeResultBaseUrl !== urls.activeResultBaseUrl) {
-        newlyFound = true;
         update.lastFoundAt = FieldValue.serverTimestamp();
       }
     } else {
@@ -180,24 +189,29 @@ export default async function handler(req, res) {
       }
     );
 
-    let whatsapp = null;
-
-    if (newlyFound && top && urls) {
-      const alertId = `result_portal_alert_${targetYear.replace(
-        /[^a-z0-9]/gi,
-        "_"
-      )}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
-
+    /*
+      IMPORTANT FIX:
+      Old condition was: if (newlyFound && top && urls)
+      New condition is: if (top && urls), then check result_seen_events.
+      So even if portal was already saved but alert did not go, next cron will send alert.
+    */
+    if (top && urls) {
+      const alertId = makeAlertId(targetYear, urls);
       const alertRef = db.collection("result_seen_events").doc(alertId);
       const alertSnap = await alertRef.get();
 
-      if (!alertSnap.exists) {
-        const msg = buildTelegramAlert(top, urls);
+      if (alertSnap.exists && alertSnap.data()?.sent) {
+        alertAlreadySent = true;
+      } else {
+        const telegramText = buildTelegramAlert(top, urls);
 
-        await sendTelegramMessage({
+        const telegram = await sendTelegramMessage({
           chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
-          text: msg
+          text: telegramText
         });
+
+        telegramSent = true;
+        telegramMessageId = telegram?.message_id || null;
 
         try {
           whatsapp = await sendWhatsAppResultAlertToAdmins({
@@ -211,17 +225,24 @@ export default async function handler(req, res) {
           };
         }
 
-        await alertRef.set({
-          type: "result_portal_public_alert",
-          targetYear,
-          href: top.href,
-          label: top.label || "",
-          urls,
-          telegramSent: true,
-          whatsapp,
-          sent: true,
-          createdAt: FieldValue.serverTimestamp()
-        });
+        await alertRef.set(
+          {
+            type: "result_portal_public_alert",
+            targetYear,
+            href: top.href,
+            label: top.label || "",
+            urls,
+            telegramSent,
+            telegramMessageId,
+            whatsapp,
+            sent: true,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp()
+          },
+          {
+            merge: true
+          }
+        );
 
         await logEvent(
           "portal_discovery",
@@ -231,6 +252,7 @@ export default async function handler(req, res) {
             href: top.href,
             label: top.label,
             urls,
+            telegramMessageId,
             whatsapp
           }
         );
@@ -243,6 +265,9 @@ export default async function handler(req, res) {
       top,
       currentYearCandidates: currentYearCandidates.slice(0, 10),
       candidates: candidates.slice(0, 10),
+      alertAlreadySent,
+      telegramSent,
+      telegramMessageId,
       whatsapp
     });
   } catch (err) {
