@@ -4,7 +4,9 @@ import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
 import { logEvent } from "../../lib/logger";
 import {
   OFFICIAL_MAIN_PORTAL,
+  RESULT26_DIRECT_LINKS,
   validateResultLink,
+  validateDirectResultForms,
   buildResultInstruction
 } from "../../lib/resultLinkValidator";
 
@@ -25,16 +27,37 @@ function buildWhatsAppShareLink(message) {
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
 }
 
-function buildAlertMessage({ title, displayUrl, originalUrl, validatedLink }) {
-  const instruction = buildResultInstruction(validatedLink);
+function getValidDirectFormsText(directFormValidations = []) {
+  const validForms = directFormValidations.filter((item) => item.valid);
+
+  if (!validForms.length) return "";
+
+  return validForms
+    .map((item) => `${item.label}:\n${item.url}`)
+    .join("\n\n");
+}
+
+function buildAlertMessage({
+  title,
+  displayUrl,
+  originalUrl,
+  validatedLink,
+  directFormValidations
+}) {
+  const instruction = buildResultInstruction(validatedLink, RESULT26_DIRECT_LINKS);
+  const validFormsText = getValidDirectFormsText(directFormValidations);
 
   const plain = [
     "PDUSU Result 2025-26 Portal Detected",
     "",
     `Title: ${title}`,
     "",
-    `Official Link: ${displayUrl}`,
-    validatedLink?.valid ? "" : "Note: Direct result link may expire, so use the official exam portal link above.",
+    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
+    "",
+    validFormsText ? `Direct Result Links:\n${validFormsText}` : "",
+    "",
+    `Safe Public Link: ${displayUrl}`,
+    validatedLink?.valid ? "" : "Note: Direct session result link may expire, so use the official exam portal or stable direct result links.",
     "",
     instruction,
     "",
@@ -55,14 +78,19 @@ function buildAlertMessage({ title, displayUrl, originalUrl, validatedLink }) {
     "",
     `<b>Title:</b> ${title}`,
     "",
-    "<b>Official Link:</b>",
+    "<b>Official Main Portal:</b>",
+    OFFICIAL_MAIN_PORTAL,
+    "",
+    validFormsText ? `<b>Direct Result Links:</b>\n${validFormsText}` : "",
+    "",
+    "<b>Safe Public Link:</b>",
     displayUrl,
     "",
     validatedLink?.valid
       ? ""
-      : "⚠️ Direct result session link expire/server error de sakta hai. Isliye safe official portal link share kiya gaya hai.",
+      : "⚠️ Direct result session link expire/server error de sakta hai. Isliye safe official portal/stable direct links share kiye gaye hain.",
     "",
-    `<b>Instruction:</b>`,
+    "<b>Instruction:</b>",
     instruction,
     "",
     originalUrl && originalUrl !== displayUrl
@@ -96,16 +124,22 @@ export default async function handler(req, res) {
     );
 
     const validatedLink = await validateResultLink(inputUrl);
+    const directFormValidations = await validateDirectResultForms();
 
-    const displayUrl = validatedLink.valid
-      ? validatedLink.safeUrl
-      : OFFICIAL_MAIN_PORTAL;
+    const validDirectForms = directFormValidations.filter((item) => item.valid);
+
+    const displayUrl = validDirectForms.length
+      ? validDirectForms[0].url
+      : validatedLink.valid
+        ? validatedLink.safeUrl
+        : OFFICIAL_MAIN_PORTAL;
 
     const telegramMessage = buildAlertMessage({
       title,
       displayUrl,
       originalUrl: validatedLink.originalUrl || inputUrl,
-      validatedLink
+      validatedLink,
+      directFormValidations
     });
 
     const telegram = await sendTelegramMessage({
@@ -132,6 +166,7 @@ export default async function handler(req, res) {
       inputUrl,
       displayUrl,
       validatedLink,
+      directFormValidations,
       telegramMessageId: telegram?.message_id || null,
       whatsapp
     });
@@ -142,6 +177,7 @@ export default async function handler(req, res) {
       inputUrl,
       displayUrl,
       validatedLink,
+      directFormValidations,
       telegramMessageId: telegram?.message_id || null,
       whatsapp
     });
