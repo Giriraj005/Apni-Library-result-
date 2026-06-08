@@ -64,10 +64,6 @@ function isCurrentYearResultCandidate(candidate, targetYear) {
   return hasCurrentYear && hasResultSignal && !oldYear && !blocked;
 }
 
-function buildWhatsAppShareLink(message) {
-  return `https://wa.me/?text=${encodeURIComponent(message)}`;
-}
-
 function getValidDirectFormsText(directFormValidations = []) {
   const validForms = directFormValidations.filter((item) => item.valid);
 
@@ -76,39 +72,6 @@ function getValidDirectFormsText(directFormValidations = []) {
   return validForms
     .map((item) => `${item.label}:\n${item.url}`)
     .join("\n\n");
-}
-
-function buildPlainShareMessage({
-  top,
-  displayUrl,
-  originalUrl,
-  validatedLink,
-  directLinks,
-  directFormValidations
-}) {
-  const instruction = buildResultInstruction(validatedLink, directLinks);
-  const validFormsText = getValidDirectFormsText(directFormValidations);
-
-  return [
-    "PDUSU Result 2025-26 Portal Detected",
-    "",
-    `Title: ${top?.label || "Result 2025-26"}`,
-    "",
-    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
-    "",
-    validFormsText ? `Direct Result Links:\n${validFormsText}` : "",
-    "",
-    `Safe Public Link: ${displayUrl}`,
-    "",
-    instruction,
-    "",
-    originalUrl && originalUrl !== displayUrl
-      ? `Detected Session Link: ${originalUrl}`
-      : "",
-    "Source: Official University Result Portal"
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function buildTelegramAlert({
@@ -121,17 +84,6 @@ function buildTelegramAlert({
 }) {
   const instruction = buildResultInstruction(validatedLink, directLinks);
   const validFormsText = getValidDirectFormsText(directFormValidations);
-
-  const plain = buildPlainShareMessage({
-    top,
-    displayUrl,
-    originalUrl,
-    validatedLink,
-    directLinks,
-    directFormValidations
-  });
-
-  const shareLink = buildWhatsAppShareLink(plain);
 
   return [
     "🎓 <b>PDUSU Result 2025-26 Portal Detected</b>",
@@ -155,36 +107,13 @@ function buildTelegramAlert({
       ? `<b>Detected Session Link:</b>\n${originalUrl}`
       : "",
     "",
-    "<b>WhatsApp Share:</b>",
-    shareLink,
-    "",
     "Source: Official University Result Portal"
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function buildDirectFormPlainMessage(form) {
-  return [
-    `${form.alertTitle || form.label} Active`,
-    "",
-    `${form.label} official result link active ho gaya hai.`,
-    "",
-    `Direct Result Link: ${form.url}`,
-    "",
-    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
-    "",
-    "Students अपना course/semester select करके roll number से result check करें।",
-    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
-    "",
-    "Source: Official University Result Portal"
-  ].join("\n");
-}
-
 function buildDirectFormTelegramAlert(form) {
-  const plain = buildDirectFormPlainMessage(form);
-  const shareLink = buildWhatsAppShareLink(plain);
-
   return [
     `🎓 <b>${form.alertTitle || form.label} Active</b>`,
     "",
@@ -198,9 +127,6 @@ function buildDirectFormTelegramAlert(form) {
     "",
     "Students अपना course/semester select करके roll number से result check करें।",
     "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
-    "",
-    "<b>WhatsApp Share:</b>",
-    shareLink,
     "",
     "Source: Official University Result Portal"
   ].join("\n");
@@ -240,12 +166,6 @@ async function sendDirectFormAlert({
     };
   }
 
-  /*
-    Migration safety:
-    PG alert was already sent earlier through the generic portal alert.
-    So after deploying this update, PG should not spam again.
-    UG must NOT be suppressed because UG was not active earlier.
-  */
   if (form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
     await alertRef.set(
       {
@@ -471,12 +391,6 @@ export default async function handler(req, res) {
 
       const validDirectForms = directFormValidations.filter((item) => item.valid);
 
-      /*
-        Direct form alerts are now separate:
-        - PG_NEP has its own event ID
-        - UG_NEP has its own event ID
-        This is the most important fix.
-      */
       for (const form of validDirectForms) {
         const result = await sendDirectFormAlert({
           targetYear,
@@ -487,10 +401,6 @@ export default async function handler(req, res) {
         directFormAlertResults.push(result);
       }
 
-      /*
-        Generic portal alert only goes when no direct stable form is valid.
-        This avoids sending generic portal + direct PG duplicate together.
-      */
       if (!validDirectForms.length) {
         if (genericPortalAlertAlreadySent) {
           alertAlreadySent = true;
@@ -587,4 +497,4 @@ export default async function handler(req, res) {
     await logEvent("portal_discovery", "error", err.message, {});
     return safeJsonError(res, err);
   }
-        }
+}
