@@ -10,6 +10,8 @@ import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
 import {
   OFFICIAL_MAIN_PORTAL,
   validateResultLink,
+  validateDirectResultForms,
+  deriveStableResultLinksFromDetectedUrl,
   buildResultInstruction
 } from "../../lib/resultLinkValidator";
 
@@ -30,7 +32,8 @@ function isCurrentYearResultCandidate(candidate, targetYear) {
   const hasResultSignal =
     hay.includes("result") ||
     hay.includes("results.aspx") ||
-    hay.includes("nep_result.aspx");
+    hay.includes("nep_result.aspx") ||
+    hay.includes("pg_nep_result.aspx");
 
   const oldYear =
     hay.includes("2024-25") ||
@@ -56,21 +59,43 @@ function buildWhatsAppShareLink(message) {
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
 }
 
-function buildPlainShareMessage({ top, displayUrl, originalUrl, validatedLink }) {
-  const instruction = buildResultInstruction(validatedLink);
+function getValidDirectFormsText(directFormValidations = []) {
+  const validForms = directFormValidations.filter((item) => item.valid);
+
+  if (!validForms.length) return "";
+
+  return validForms
+    .map((item) => `${item.label}:\n${item.url}`)
+    .join("\n\n");
+}
+
+function buildPlainShareMessage({
+  top,
+  displayUrl,
+  originalUrl,
+  validatedLink,
+  directLinks,
+  directFormValidations
+}) {
+  const instruction = buildResultInstruction(validatedLink, directLinks);
+  const validFormsText = getValidDirectFormsText(directFormValidations);
 
   return [
     "PDUSU Result 2025-26 Portal Detected",
     "",
     `Title: ${top.label || "Result 2025-26"}`,
     "",
-    `Official Link: ${displayUrl}`,
-    validatedLink?.valid ? "" : "Note: Direct result link may expire, so use the official exam portal link above.",
+    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
+    "",
+    validFormsText ? `Direct Result Links:\n${validFormsText}` : "",
+    "",
+    `Safe Public Link: ${displayUrl}`,
+    validatedLink?.valid ? "" : "Note: Direct session result link may expire, so use the official exam portal or stable direct result links.",
     "",
     instruction,
     "",
     originalUrl && originalUrl !== displayUrl
-      ? `Detected Link: ${originalUrl}`
+      ? `Detected Session Link: ${originalUrl}`
       : "",
     "Source: Official University Result Portal"
   ]
@@ -78,14 +103,26 @@ function buildPlainShareMessage({ top, displayUrl, originalUrl, validatedLink })
     .join("\n");
 }
 
-function buildTelegramAlert({ top, displayUrl, originalUrl, validatedLink }) {
-  const instruction = buildResultInstruction(validatedLink);
+function buildTelegramAlert({
+  top,
+  displayUrl,
+  originalUrl,
+  validatedLink,
+  directLinks,
+  directFormValidations
+}) {
+  const instruction = buildResultInstruction(validatedLink, directLinks);
+  const validFormsText = getValidDirectFormsText(directFormValidations);
+
   const plain = buildPlainShareMessage({
     top,
     displayUrl,
     originalUrl,
-    validatedLink
+    validatedLink,
+    directLinks,
+    directFormValidations
   });
+
   const shareLink = buildWhatsAppShareLink(plain);
 
   return [
@@ -95,18 +132,23 @@ function buildTelegramAlert({ top, displayUrl, originalUrl, validatedLink }) {
     "",
     `<b>Title:</b> ${top.label || "Result 2025-26"}`,
     "",
-    "<b>Official Link:</b>",
+    "<b>Official Main Portal:</b>",
+    OFFICIAL_MAIN_PORTAL,
+    "",
+    validFormsText ? `<b>Direct Result Links:</b>\n${validFormsText}` : "",
+    "",
+    "<b>Safe Public Link:</b>",
     displayUrl,
     "",
     validatedLink?.valid
       ? ""
-      : "⚠️ Direct result session link expire/server error de sakta hai. Isliye safe official portal link share kiya gaya hai.",
+      : "⚠️ Direct session link expire/server error de sakta hai. Isliye safe official portal/stable direct links share kiye gaye hain.",
     "",
     "<b>Instruction:</b>",
     instruction,
     "",
     originalUrl && originalUrl !== displayUrl
-      ? `<b>Detected Result Link:</b>\n${originalUrl}`
+      ? `<b>Detected Session Link:</b>\n${originalUrl}`
       : "",
     "",
     "<b>WhatsApp Share:</b>",
@@ -167,6 +209,8 @@ export default async function handler(req, res) {
     };
 
     let urls = null;
+    let directLinks = null;
+    let directFormValidations = [];
     let validatedLink = null;
     let displayUrl = OFFICIAL_MAIN_PORTAL;
     let telegramSent = false;
@@ -176,16 +220,32 @@ export default async function handler(req, res) {
 
     if (top) {
       urls = derivePortalUrls(top.href);
+      directLinks = deriveStableResultLinksFromDetectedUrl(top.href);
 
       validatedLink = await validateResultLink(top.href);
-      displayUrl = validatedLink.valid ? validatedLink.safeUrl : OFFICIAL_MAIN_PORTAL;
+      directFormValidations = await validateDirectResultForms();
+
+      const validDirectForms = directFormValidations.filter((item) => item.valid);
+
+      if (validDirectForms.length) {
+        displayUrl = validDirectForms[0].url;
+      } else {
+        displayUrl = validatedLink.valid ? validatedLink.safeUrl : OFFICIAL_MAIN_PORTAL;
+      }
 
       update.activeResultBaseUrl = urls.activeResultBaseUrl;
       update.activeResultsPageUrl = urls.activeResultsPageUrl;
       update.activeNepResultUrl = urls.activeNepResultUrl;
-      update.safePublicResultUrl = displayUrl;
       update.detectedResultUrl = top.href;
+      update.safePublicResultUrl = displayUrl;
+
+      update.directLinks = directLinks;
+      update.ugNepResultUrl = directLinks.ugNepResultUrl;
+      update.pgNepResultUrl = directLinks.pgNepResultUrl;
+      update.officialMainPortal = OFFICIAL_MAIN_PORTAL;
+
       update.resultLinkValidation = validatedLink;
+      update.directFormValidations = directFormValidations;
       update.status = "portal_found";
 
       if (old.activeResultBaseUrl !== urls.activeResultBaseUrl) {
@@ -197,6 +257,10 @@ export default async function handler(req, res) {
       update.activeResultsPageUrl = old.activeResultsPageUrl || "";
       update.activeNepResultUrl = old.activeNepResultUrl || "";
       update.safePublicResultUrl = old.safePublicResultUrl || OFFICIAL_MAIN_PORTAL;
+      update.officialMainPortal = OFFICIAL_MAIN_PORTAL;
+      update.directLinks = old.directLinks || {};
+      update.ugNepResultUrl = old.ugNepResultUrl || "";
+      update.pgNepResultUrl = old.pgNepResultUrl || "";
     }
 
     await sourceRef.set(update, {
@@ -214,6 +278,8 @@ export default async function handler(req, res) {
         totalCandidates: candidates.length,
         currentYearCandidates: currentYearCandidates.length,
         validatedLink,
+        directLinks,
+        directFormValidations,
         displayUrl
       }
     );
@@ -230,7 +296,9 @@ export default async function handler(req, res) {
           top,
           displayUrl,
           originalUrl: top.href,
-          validatedLink
+          validatedLink,
+          directLinks,
+          directFormValidations
         });
 
         const telegram = await sendTelegramMessage({
@@ -260,8 +328,10 @@ export default async function handler(req, res) {
             href: top.href,
             label: top.label || "",
             urls,
+            directLinks,
             displayUrl,
             validatedLink,
+            directFormValidations,
             telegramSent,
             telegramMessageId,
             whatsapp,
@@ -282,8 +352,10 @@ export default async function handler(req, res) {
             href: top.href,
             label: top.label,
             urls,
+            directLinks,
             displayUrl,
             validatedLink,
+            directFormValidations,
             telegramMessageId,
             whatsapp
           }
@@ -298,6 +370,8 @@ export default async function handler(req, res) {
       currentYearCandidates: currentYearCandidates.slice(0, 10),
       candidates: candidates.slice(0, 10),
       displayUrl,
+      directLinks,
+      directFormValidations,
       validatedLink,
       alertAlreadySent,
       telegramSent,
