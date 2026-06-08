@@ -4,11 +4,36 @@ import { hashText } from "../../lib/resultDiscovery";
 import { stripHtml } from "../../lib/resultParser";
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
+import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
 
 const TARGET_COURSES = ["B.A.", "B.SC", "B.COM", "B.B.A.", "B.C.A."];
 const TARGET_SEMESTERS = ["SEMESTER I", "SEMESTER III", "SEMESTER V"];
 
+function buildWhatsAppShareLink(message) {
+  return `https://wa.me/?text=${encodeURIComponent(message)}`;
+}
+
+function buildPlainShareMessage({ url, strongSignals }) {
+  return [
+    "PDUSU Result Update Detected",
+    "",
+    strongSignals.length
+      ? `Detected Signals:\n${strongSignals.join("\n")}`
+      : "Official result listing page par update detect hua hai.",
+    "",
+    `Official Result Page: ${url}`,
+    "",
+    "Students official portal par apna roll number check karein.",
+    "Source: Official University Result Portal"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildResultMonitorAlert({ url, strongSignals }) {
+  const plain = buildPlainShareMessage({ url, strongSignals });
+  const shareLink = buildWhatsAppShareLink(plain);
+
   return [
     "📢 <b>PDUSU Result Update Detected</b>",
     "",
@@ -20,6 +45,9 @@ function buildResultMonitorAlert({ url, strongSignals }) {
     "",
     `<b>Open Official Result Page:</b>`,
     url,
+    "",
+    `<b>WhatsApp Share:</b>`,
+    shareLink,
     "",
     "Students official portal par apna roll number check karein.",
     "",
@@ -84,6 +112,8 @@ export default async function handler(req, res) {
     const eventRef = db.collection("result_seen_events").doc(eventId);
     const already = await eventRef.get();
 
+    let whatsapp = null;
+
     if (!already.exists) {
       await eventRef.set({
         type: "result_listing_hash",
@@ -111,6 +141,29 @@ export default async function handler(req, res) {
             strongSignals
           })
         });
+
+        try {
+          whatsapp = await sendWhatsAppResultAlertToAdmins({
+            title: "PDUSU Result Update",
+            link: url
+          });
+        } catch (err) {
+          whatsapp = {
+            success: false,
+            error: err.message
+          };
+        }
+
+        await eventRef.set(
+          {
+            telegramSent: true,
+            whatsapp,
+            updatedAt: FieldValue.serverTimestamp()
+          },
+          {
+            merge: true
+          }
+        );
       }
     }
 
@@ -120,7 +173,8 @@ export default async function handler(req, res) {
       url,
       hash: pageHash,
       changed: !already.exists,
-      strongSignals
+      strongSignals,
+      whatsapp
     });
   } catch (err) {
     await logEvent("result_monitor", "error", err.message, {});
