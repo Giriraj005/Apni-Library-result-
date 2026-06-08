@@ -6,6 +6,7 @@ import {
 } from "../../lib/resultDiscovery";
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
+import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
 
 function isCurrentYearResultCandidate(candidate, targetYear) {
   if (!candidate) return false;
@@ -46,7 +47,31 @@ function isCurrentYearResultCandidate(candidate, targetYear) {
   return hasCurrentYear && hasResultSignal && !oldYear && !blocked;
 }
 
+function buildWhatsAppShareLink(message) {
+  return `https://wa.me/?text=${encodeURIComponent(message)}`;
+}
+
+function buildPlainShareMessage(top, urls) {
+  return [
+    "PDUSU Result 2025-26 Portal Detected",
+    "",
+    `Title: ${top.label || "Result 2025-26"}`,
+    "",
+    `Official Link: ${top.href}`,
+    urls?.activeResultsPageUrl ? `Result List: ${urls.activeResultsPageUrl}` : "",
+    urls?.activeNepResultUrl ? `NEP Result Form: ${urls.activeNepResultUrl}` : "",
+    "",
+    "Students official portal par apna roll number check karein.",
+    "Source: Official University Result Portal"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildTelegramAlert(top, urls) {
+  const plain = buildPlainShareMessage(top, urls);
+  const shareLink = buildWhatsAppShareLink(plain);
+
   return [
     "🎓 <b>PDUSU Result 2025-26 Portal Detected</b>",
     "",
@@ -63,6 +88,9 @@ function buildTelegramAlert(top, urls) {
     urls?.activeNepResultUrl
       ? `\n<b>NEP Result Form:</b>\n${urls.activeNepResultUrl}`
       : "",
+    "",
+    `<b>WhatsApp Share:</b>`,
+    shareLink,
     "",
     "Students apna roll number official portal par check karein.",
     "",
@@ -152,8 +180,14 @@ export default async function handler(req, res) {
       }
     );
 
+    let whatsapp = null;
+
     if (newlyFound && top && urls) {
-      const alertId = `result_portal_alert_${targetYear.replace(/[^a-z0-9]/gi, "_")}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
+      const alertId = `result_portal_alert_${targetYear.replace(
+        /[^a-z0-9]/gi,
+        "_"
+      )}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
+
       const alertRef = db.collection("result_seen_events").doc(alertId);
       const alertSnap = await alertRef.get();
 
@@ -165,21 +199,41 @@ export default async function handler(req, res) {
           text: msg
         });
 
+        try {
+          whatsapp = await sendWhatsAppResultAlertToAdmins({
+            title: "PDUSU Result 2025-26",
+            link: top.href
+          });
+        } catch (err) {
+          whatsapp = {
+            success: false,
+            error: err.message
+          };
+        }
+
         await alertRef.set({
           type: "result_portal_public_alert",
           targetYear,
           href: top.href,
           label: top.label || "",
           urls,
+          telegramSent: true,
+          whatsapp,
           sent: true,
           createdAt: FieldValue.serverTimestamp()
         });
 
-        await logEvent("portal_discovery", "warn", "Public result portal alert sent", {
-          href: top.href,
-          label: top.label,
-          urls
-        });
+        await logEvent(
+          "portal_discovery",
+          "warn",
+          "Public result portal alert sent",
+          {
+            href: top.href,
+            label: top.label,
+            urls,
+            whatsapp
+          }
+        );
       }
     }
 
@@ -188,7 +242,8 @@ export default async function handler(req, res) {
       status: update.status,
       top,
       currentYearCandidates: currentYearCandidates.slice(0, 10),
-      candidates: candidates.slice(0, 10)
+      candidates: candidates.slice(0, 10),
+      whatsapp
     });
   } catch (err) {
     await logEvent("portal_discovery", "error", err.message, {});
