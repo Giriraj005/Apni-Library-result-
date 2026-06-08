@@ -22,31 +22,7 @@ function cleanId(value) {
     .slice(0, 120);
 }
 
-function buildWhatsAppShareLink(message) {
-  return `https://wa.me/?text=${encodeURIComponent(message)}`;
-}
-
-function buildPlainShareMessage({ url, strongSignals }) {
-  return [
-    "PDUSU Result Update Detected",
-    "",
-    strongSignals.length
-      ? `Detected Signals:\n${strongSignals.join("\n")}`
-      : "Official result listing page par update detect hua hai.",
-    "",
-    `Official Result Page: ${url}`,
-    "",
-    "Students official portal par apna roll number check karein.",
-    "Source: Official University Result Portal"
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function buildResultMonitorAlert({ url, strongSignals }) {
-  const plain = buildPlainShareMessage({ url, strongSignals });
-  const shareLink = buildWhatsAppShareLink(plain);
-
   return [
     "📢 <b>PDUSU Result Update Detected</b>",
     "",
@@ -59,9 +35,6 @@ function buildResultMonitorAlert({ url, strongSignals }) {
     "<b>Open Official Result Page:</b>",
     url,
     "",
-    "<b>WhatsApp Share:</b>",
-    shareLink,
-    "",
     "Students official portal par apna roll number check karein.",
     "",
     "Source: Official University Result Portal"
@@ -70,27 +43,7 @@ function buildResultMonitorAlert({ url, strongSignals }) {
     .join("\n");
 }
 
-function buildDirectFormPlainMessage(form) {
-  return [
-    `${form.alertTitle || form.label} Active`,
-    "",
-    `${form.label} official result link active ho gaya hai.`,
-    "",
-    `Direct Result Link: ${form.url}`,
-    "",
-    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
-    "",
-    "Students अपना course/semester select करके roll number से result check करें।",
-    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
-    "",
-    "Source: Official University Result Portal"
-  ].join("\n");
-}
-
 function buildDirectFormTelegramAlert(form) {
-  const plain = buildDirectFormPlainMessage(form);
-  const shareLink = buildWhatsAppShareLink(plain);
-
   return [
     `🎓 <b>${form.alertTitle || form.label} Active</b>`,
     "",
@@ -104,9 +57,6 @@ function buildDirectFormTelegramAlert(form) {
     "",
     "Students अपना course/semester select करके roll number से result check करें।",
     "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
-    "",
-    "<b>WhatsApp Share:</b>",
-    shareLink,
     "",
     "Source: Official University Result Portal"
   ].join("\n");
@@ -146,12 +96,6 @@ async function sendDirectFormAlert({
     };
   }
 
-  /*
-    Migration safety:
-    PG alert already went from old generic portal alert.
-    Do not send PG again after this new split-alert system deploys.
-    UG must still send when it becomes valid.
-  */
   if (form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
     await alertRef.set(
       {
@@ -356,11 +300,6 @@ export default async function handler(req, res) {
         }
       );
 
-      /*
-        Listing alert only goes when strong signal exists.
-        Hash-only changes are stored but do not send alert.
-        This prevents false spam due to ASP.NET ViewState/session changes.
-      */
       if (strongSignals.length) {
         await sendTelegramMessage({
           chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
@@ -414,4 +353,4 @@ export default async function handler(req, res) {
     await logEvent("result_monitor", "error", err.message, {});
     return safeJsonError(res, err);
   }
-          }
+}
