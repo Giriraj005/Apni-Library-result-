@@ -7,6 +7,11 @@ import {
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
 import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
+import {
+  OFFICIAL_MAIN_PORTAL,
+  validateResultLink,
+  buildResultInstruction
+} from "../../lib/resultLinkValidator";
 
 function isCurrentYearResultCandidate(candidate, targetYear) {
   if (!candidate) return false;
@@ -51,25 +56,36 @@ function buildWhatsAppShareLink(message) {
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
 }
 
-function buildPlainShareMessage(top, urls) {
+function buildPlainShareMessage({ top, displayUrl, originalUrl, validatedLink }) {
+  const instruction = buildResultInstruction(validatedLink);
+
   return [
     "PDUSU Result 2025-26 Portal Detected",
     "",
     `Title: ${top.label || "Result 2025-26"}`,
     "",
-    `Official Link: ${top.href}`,
-    urls?.activeResultsPageUrl ? `Result List: ${urls.activeResultsPageUrl}` : "",
-    urls?.activeNepResultUrl ? `NEP Result Form: ${urls.activeNepResultUrl}` : "",
+    `Official Link: ${displayUrl}`,
+    validatedLink?.valid ? "" : "Note: Direct result link may expire, so use the official exam portal link above.",
     "",
-    "Students official portal par apna roll number check karein.",
+    instruction,
+    "",
+    originalUrl && originalUrl !== displayUrl
+      ? `Detected Link: ${originalUrl}`
+      : "",
     "Source: Official University Result Portal"
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function buildTelegramAlert(top, urls) {
-  const plain = buildPlainShareMessage(top, urls);
+function buildTelegramAlert({ top, displayUrl, originalUrl, validatedLink }) {
+  const instruction = buildResultInstruction(validatedLink);
+  const plain = buildPlainShareMessage({
+    top,
+    displayUrl,
+    originalUrl,
+    validatedLink
+  });
   const shareLink = buildWhatsAppShareLink(plain);
 
   return [
@@ -79,20 +95,22 @@ function buildTelegramAlert(top, urls) {
     "",
     `<b>Title:</b> ${top.label || "Result 2025-26"}`,
     "",
-    "<b>Open Official Result Link:</b>",
-    top.href,
+    "<b>Official Link:</b>",
+    displayUrl,
     "",
-    urls?.activeResultsPageUrl
-      ? `<b>Result List Page:</b>\n${urls.activeResultsPageUrl}`
-      : "",
-    urls?.activeNepResultUrl
-      ? `\n<b>NEP Result Form:</b>\n${urls.activeNepResultUrl}`
+    validatedLink?.valid
+      ? ""
+      : "⚠️ Direct result session link expire/server error de sakta hai. Isliye safe official portal link share kiya gaya hai.",
+    "",
+    "<b>Instruction:</b>",
+    instruction,
+    "",
+    originalUrl && originalUrl !== displayUrl
+      ? `<b>Detected Result Link:</b>\n${originalUrl}`
       : "",
     "",
     "<b>WhatsApp Share:</b>",
     shareLink,
-    "",
-    "Students apna roll number official portal par check karein.",
     "",
     "Source: Official University Result Portal"
   ]
@@ -149,6 +167,8 @@ export default async function handler(req, res) {
     };
 
     let urls = null;
+    let validatedLink = null;
+    let displayUrl = OFFICIAL_MAIN_PORTAL;
     let telegramSent = false;
     let telegramMessageId = null;
     let whatsapp = null;
@@ -157,9 +177,15 @@ export default async function handler(req, res) {
     if (top) {
       urls = derivePortalUrls(top.href);
 
+      validatedLink = await validateResultLink(top.href);
+      displayUrl = validatedLink.valid ? validatedLink.safeUrl : OFFICIAL_MAIN_PORTAL;
+
       update.activeResultBaseUrl = urls.activeResultBaseUrl;
       update.activeResultsPageUrl = urls.activeResultsPageUrl;
       update.activeNepResultUrl = urls.activeNepResultUrl;
+      update.safePublicResultUrl = displayUrl;
+      update.detectedResultUrl = top.href;
+      update.resultLinkValidation = validatedLink;
       update.status = "portal_found";
 
       if (old.activeResultBaseUrl !== urls.activeResultBaseUrl) {
@@ -170,6 +196,7 @@ export default async function handler(req, res) {
       update.activeResultBaseUrl = old.activeResultBaseUrl || "";
       update.activeResultsPageUrl = old.activeResultsPageUrl || "";
       update.activeNepResultUrl = old.activeNepResultUrl || "";
+      update.safePublicResultUrl = old.safePublicResultUrl || OFFICIAL_MAIN_PORTAL;
     }
 
     await sourceRef.set(update, {
@@ -185,16 +212,12 @@ export default async function handler(req, res) {
       {
         top,
         totalCandidates: candidates.length,
-        currentYearCandidates: currentYearCandidates.length
+        currentYearCandidates: currentYearCandidates.length,
+        validatedLink,
+        displayUrl
       }
     );
 
-    /*
-      IMPORTANT FIX:
-      Old condition was: if (newlyFound && top && urls)
-      New condition is: if (top && urls), then check result_seen_events.
-      So even if portal was already saved but alert did not go, next cron will send alert.
-    */
     if (top && urls) {
       const alertId = makeAlertId(targetYear, urls);
       const alertRef = db.collection("result_seen_events").doc(alertId);
@@ -203,7 +226,12 @@ export default async function handler(req, res) {
       if (alertSnap.exists && alertSnap.data()?.sent) {
         alertAlreadySent = true;
       } else {
-        const telegramText = buildTelegramAlert(top, urls);
+        const telegramText = buildTelegramAlert({
+          top,
+          displayUrl,
+          originalUrl: top.href,
+          validatedLink
+        });
 
         const telegram = await sendTelegramMessage({
           chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
@@ -216,7 +244,7 @@ export default async function handler(req, res) {
         try {
           whatsapp = await sendWhatsAppResultAlertToAdmins({
             title: "PDUSU Result 2025-26",
-            link: top.href
+            link: displayUrl
           });
         } catch (err) {
           whatsapp = {
@@ -232,6 +260,8 @@ export default async function handler(req, res) {
             href: top.href,
             label: top.label || "",
             urls,
+            displayUrl,
+            validatedLink,
             telegramSent,
             telegramMessageId,
             whatsapp,
@@ -252,6 +282,8 @@ export default async function handler(req, res) {
             href: top.href,
             label: top.label,
             urls,
+            displayUrl,
+            validatedLink,
             telegramMessageId,
             whatsapp
           }
@@ -265,6 +297,8 @@ export default async function handler(req, res) {
       top,
       currentYearCandidates: currentYearCandidates.slice(0, 10),
       candidates: candidates.slice(0, 10),
+      displayUrl,
+      validatedLink,
       alertAlreadySent,
       telegramSent,
       telegramMessageId,
