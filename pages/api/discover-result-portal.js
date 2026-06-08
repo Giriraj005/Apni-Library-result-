@@ -12,8 +12,17 @@ import {
   validateResultLink,
   validateDirectResultForms,
   deriveStableResultLinksFromDetectedUrl,
-  buildResultInstruction
+  buildResultInstruction,
+  getBestDisplayUrl
 } from "../../lib/resultLinkValidator";
+
+function cleanId(value) {
+  return String(value || "")
+    .replace(/[^a-z0-9]/gi, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+}
 
 function isCurrentYearResultCandidate(candidate, targetYear) {
   if (!candidate) return false;
@@ -83,14 +92,13 @@ function buildPlainShareMessage({
   return [
     "PDUSU Result 2025-26 Portal Detected",
     "",
-    `Title: ${top.label || "Result 2025-26"}`,
+    `Title: ${top?.label || "Result 2025-26"}`,
     "",
     `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
     "",
     validFormsText ? `Direct Result Links:\n${validFormsText}` : "",
     "",
     `Safe Public Link: ${displayUrl}`,
-    validatedLink?.valid ? "" : "Note: Direct session result link may expire, so use the official exam portal or stable direct result links.",
     "",
     instruction,
     "",
@@ -130,7 +138,7 @@ function buildTelegramAlert({
     "",
     "University ki official exam site par 2025-26 result portal/link detect hua hai.",
     "",
-    `<b>Title:</b> ${top.label || "Result 2025-26"}`,
+    `<b>Title:</b> ${top?.label || "Result 2025-26"}`,
     "",
     "<b>Official Main Portal:</b>",
     OFFICIAL_MAIN_PORTAL,
@@ -139,10 +147,6 @@ function buildTelegramAlert({
     "",
     "<b>Safe Public Link:</b>",
     displayUrl,
-    "",
-    validatedLink?.valid
-      ? ""
-      : "⚠️ Direct session link expire/server error de sakta hai. Isliye safe official portal/stable direct links share kiye gaye hain.",
     "",
     "<b>Instruction:</b>",
     instruction,
@@ -160,11 +164,182 @@ function buildTelegramAlert({
     .join("\n");
 }
 
-function makeAlertId(targetYear, urls) {
-  return `result_portal_alert_${targetYear.replace(
-    /[^a-z0-9]/gi,
-    "_"
-  )}_${urls.activeResultBaseUrl.replace(/[^a-z0-9]/gi, "_")}`;
+function buildDirectFormPlainMessage(form) {
+  return [
+    `${form.alertTitle || form.label} Active`,
+    "",
+    `${form.label} official result link active ho gaya hai.`,
+    "",
+    `Direct Result Link: ${form.url}`,
+    "",
+    `Official Main Portal: ${OFFICIAL_MAIN_PORTAL}`,
+    "",
+    "Students अपना course/semester select करके roll number से result check करें।",
+    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
+    "",
+    "Source: Official University Result Portal"
+  ].join("\n");
+}
+
+function buildDirectFormTelegramAlert(form) {
+  const plain = buildDirectFormPlainMessage(form);
+  const shareLink = buildWhatsAppShareLink(plain);
+
+  return [
+    `🎓 <b>${form.alertTitle || form.label} Active</b>`,
+    "",
+    `${form.label} official result link active ho gaya hai.`,
+    "",
+    "<b>Direct Result Link:</b>",
+    form.url,
+    "",
+    "<b>Official Main Portal:</b>",
+    OFFICIAL_MAIN_PORTAL,
+    "",
+    "Students अपना course/semester select करके roll number से result check करें।",
+    "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
+    "",
+    "<b>WhatsApp Share:</b>",
+    shareLink,
+    "",
+    "Source: Official University Result Portal"
+  ].join("\n");
+}
+
+function makePortalAlertId(targetYear, urls) {
+  return `result_portal_alert_${cleanId(targetYear)}_${cleanId(
+    urls?.activeResultBaseUrl || "unknown"
+  )}`;
+}
+
+function makeDirectFormAlertId(targetYear, form) {
+  return `result_direct_form_alert_${cleanId(targetYear)}_${cleanId(
+    form.type
+  )}_${cleanId(form.url)}`;
+}
+
+async function sendDirectFormAlert({
+  targetYear,
+  form,
+  genericPortalAlertAlreadySent
+}) {
+  const alertId = makeDirectFormAlertId(targetYear, form);
+  const alertRef = db.collection("result_seen_events").doc(alertId);
+  const alertSnap = await alertRef.get();
+
+  if (alertSnap.exists && alertSnap.data()?.sent) {
+    return {
+      type: form.type,
+      label: form.label,
+      url: form.url,
+      sent: false,
+      alreadySent: true,
+      suppressed: false,
+      telegramMessageId: alertSnap.data()?.telegramMessageId || null,
+      whatsapp: alertSnap.data()?.whatsapp || null
+    };
+  }
+
+  /*
+    Migration safety:
+    PG alert was already sent earlier through the generic portal alert.
+    So after deploying this update, PG should not spam again.
+    UG must NOT be suppressed because UG was not active earlier.
+  */
+  if (form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
+    await alertRef.set(
+      {
+        type: "result_direct_form_alert",
+        formType: form.type,
+        label: form.label,
+        url: form.url,
+        targetYear,
+        sent: true,
+        suppressed: true,
+        reason: "pg_already_covered_by_old_portal_alert",
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      {
+        merge: true
+      }
+    );
+
+    return {
+      type: form.type,
+      label: form.label,
+      url: form.url,
+      sent: false,
+      alreadySent: false,
+      suppressed: true,
+      reason: "pg_already_covered_by_old_portal_alert",
+      telegramMessageId: null,
+      whatsapp: null
+    };
+  }
+
+  const telegram = await sendTelegramMessage({
+    chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+    text: buildDirectFormTelegramAlert(form)
+  });
+
+  let whatsapp = null;
+
+  try {
+    whatsapp = await sendWhatsAppResultAlertToAdmins({
+      title: form.alertTitle || form.label,
+      link: form.url
+    });
+  } catch (err) {
+    whatsapp = {
+      success: false,
+      error: err.message
+    };
+  }
+
+  const telegramMessageId = telegram?.message_id || null;
+
+  await alertRef.set(
+    {
+      type: "result_direct_form_alert",
+      formType: form.type,
+      label: form.label,
+      url: form.url,
+      targetYear,
+      valid: true,
+      status: form.status || null,
+      reason: form.reason || "",
+      telegramSent: true,
+      telegramMessageId,
+      whatsapp,
+      sent: true,
+      suppressed: false,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    {
+      merge: true
+    }
+  );
+
+  await logEvent("portal_discovery", "warn", "Direct result form alert sent", {
+    formType: form.type,
+    label: form.label,
+    url: form.url,
+    telegramMessageId,
+    whatsapp
+  });
+
+  return {
+    type: form.type,
+    label: form.label,
+    url: form.url,
+    sent: true,
+    alreadySent: false,
+    suppressed: false,
+    telegramMessageId,
+    whatsapp
+  };
 }
 
 export default async function handler(req, res) {
@@ -217,6 +392,7 @@ export default async function handler(req, res) {
     let telegramMessageId = null;
     let whatsapp = null;
     let alertAlreadySent = false;
+    let directFormAlertResults = [];
 
     if (top) {
       urls = derivePortalUrls(top.href);
@@ -225,13 +401,10 @@ export default async function handler(req, res) {
       validatedLink = await validateResultLink(top.href);
       directFormValidations = await validateDirectResultForms();
 
-      const validDirectForms = directFormValidations.filter((item) => item.valid);
-
-      if (validDirectForms.length) {
-        displayUrl = validDirectForms[0].url;
-      } else {
-        displayUrl = validatedLink.valid ? validatedLink.safeUrl : OFFICIAL_MAIN_PORTAL;
-      }
+      displayUrl = getBestDisplayUrl({
+        directFormValidations,
+        validatedLink
+      });
 
       update.activeResultBaseUrl = urls.activeResultBaseUrl;
       update.activeResultsPageUrl = urls.activeResultsPageUrl;
@@ -256,7 +429,8 @@ export default async function handler(req, res) {
       update.activeResultBaseUrl = old.activeResultBaseUrl || "";
       update.activeResultsPageUrl = old.activeResultsPageUrl || "";
       update.activeNepResultUrl = old.activeNepResultUrl || "";
-      update.safePublicResultUrl = old.safePublicResultUrl || OFFICIAL_MAIN_PORTAL;
+      update.safePublicResultUrl =
+        old.safePublicResultUrl || OFFICIAL_MAIN_PORTAL;
       update.officialMainPortal = OFFICIAL_MAIN_PORTAL;
       update.directLinks = old.directLinks || {};
       update.ugNepResultUrl = old.ugNepResultUrl || "";
@@ -285,81 +459,111 @@ export default async function handler(req, res) {
     );
 
     if (top && urls) {
-      const alertId = makeAlertId(targetYear, urls);
-      const alertRef = db.collection("result_seen_events").doc(alertId);
-      const alertSnap = await alertRef.get();
+      const portalAlertId = makePortalAlertId(targetYear, urls);
+      const portalAlertRef = db.collection("result_seen_events").doc(portalAlertId);
+      const portalAlertSnap = await portalAlertRef.get();
+      const genericPortalAlertAlreadySent =
+        portalAlertSnap.exists && portalAlertSnap.data()?.sent;
 
-      if (alertSnap.exists && alertSnap.data()?.sent) {
+      if (genericPortalAlertAlreadySent) {
         alertAlreadySent = true;
-      } else {
-        const telegramText = buildTelegramAlert({
-          top,
-          displayUrl,
-          originalUrl: top.href,
-          validatedLink,
-          directLinks,
-          directFormValidations
+      }
+
+      const validDirectForms = directFormValidations.filter((item) => item.valid);
+
+      /*
+        Direct form alerts are now separate:
+        - PG_NEP has its own event ID
+        - UG_NEP has its own event ID
+        This is the most important fix.
+      */
+      for (const form of validDirectForms) {
+        const result = await sendDirectFormAlert({
+          targetYear,
+          form,
+          genericPortalAlertAlreadySent
         });
 
-        const telegram = await sendTelegramMessage({
-          chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
-          text: telegramText
-        });
+        directFormAlertResults.push(result);
+      }
 
-        telegramSent = true;
-        telegramMessageId = telegram?.message_id || null;
-
-        try {
-          whatsapp = await sendWhatsAppResultAlertToAdmins({
-            title: "PDUSU Result 2025-26",
-            link: displayUrl
+      /*
+        Generic portal alert only goes when no direct stable form is valid.
+        This avoids sending generic portal + direct PG duplicate together.
+      */
+      if (!validDirectForms.length) {
+        if (genericPortalAlertAlreadySent) {
+          alertAlreadySent = true;
+        } else {
+          const telegramText = buildTelegramAlert({
+            top,
+            displayUrl,
+            originalUrl: top.href,
+            validatedLink,
+            directLinks,
+            directFormValidations
           });
-        } catch (err) {
-          whatsapp = {
-            success: false,
-            error: err.message
-          };
+
+          const telegram = await sendTelegramMessage({
+            chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+            text: telegramText
+          });
+
+          telegramSent = true;
+          telegramMessageId = telegram?.message_id || null;
+
+          try {
+            whatsapp = await sendWhatsAppResultAlertToAdmins({
+              title: "PDUSU Result 2025-26",
+              link: displayUrl
+            });
+          } catch (err) {
+            whatsapp = {
+              success: false,
+              error: err.message
+            };
+          }
+
+          await portalAlertRef.set(
+            {
+              type: "result_portal_public_alert",
+              targetYear,
+              href: top.href,
+              label: top.label || "",
+              urls,
+              directLinks,
+              displayUrl,
+              validatedLink,
+              directFormValidations,
+              telegramSent,
+              telegramMessageId,
+              whatsapp,
+              sent: true,
+              createdAt: FieldValue.serverTimestamp(),
+              updatedAt: FieldValue.serverTimestamp()
+            },
+            {
+              merge: true
+            }
+          );
+
+          await logEvent(
+            "portal_discovery",
+            "warn",
+            "Public result portal alert sent",
+            {
+              href: top.href,
+              label: top.label,
+              urls,
+              directLinks,
+              displayUrl,
+              validatedLink,
+              directFormValidations,
+              telegramMessageId,
+              whatsapp
+            }
+          );
         }
-
-        await alertRef.set(
-          {
-            type: "result_portal_public_alert",
-            targetYear,
-            href: top.href,
-            label: top.label || "",
-            urls,
-            directLinks,
-            displayUrl,
-            validatedLink,
-            directFormValidations,
-            telegramSent,
-            telegramMessageId,
-            whatsapp,
-            sent: true,
-            createdAt: FieldValue.serverTimestamp(),
-            updatedAt: FieldValue.serverTimestamp()
-          },
-          {
-            merge: true
-          }
-        );
-
-        await logEvent(
-          "portal_discovery",
-          "warn",
-          "Public result portal alert sent",
-          {
-            href: top.href,
-            label: top.label,
-            urls,
-            directLinks,
-            displayUrl,
-            validatedLink,
-            directFormValidations,
-            telegramMessageId,
-            whatsapp
-          }
-        );
       }
     }
 
@@ -376,10 +580,11 @@ export default async function handler(req, res) {
       alertAlreadySent,
       telegramSent,
       telegramMessageId,
-      whatsapp
+      whatsapp,
+      directFormAlertResults
     });
   } catch (err) {
     await logEvent("portal_discovery", "error", err.message, {});
     return safeJsonError(res, err);
   }
-}
+        }
