@@ -7,6 +7,7 @@ import {
 } from "../../lib/security";
 import { makeRegistrationKey } from "../../lib/resultQueue";
 import { logEvent } from "../../lib/logger";
+import { resultTypeLabel } from "../../lib/resultCourseCatalog";
 
 export default async function handler(req, res) {
   try {
@@ -21,42 +22,35 @@ export default async function handler(req, res) {
 
     const course = cleanText(body.course).toUpperCase();
     const semester = cleanText(body.semester).toUpperCase();
-    const resultType = cleanText(
+    const inputYearPart = cleanText(body.yearPart || body.courseOption || "");
+    const resultType = resultTypeLabel(
       body.resultType || process.env.DEFAULT_RESULT_TYPE || "MAIN"
-    ).toUpperCase();
-
+    );
     const rollNo = normalizeRollNo(body.rollNo);
     const studentName = cleanText(body.studentName);
     const mobile = cleanText(body.mobile);
     const consentTelegramGroup = Boolean(body.consentTelegramGroup);
 
-    if (!course || !semester || !rollNo) {
+    if ((!course && !inputYearPart) || !rollNo) {
       return res.status(400).json({
         success: false,
-        error: "Course, semester and roll number are required"
-      });
-    }
-
-    if (!["I", "III", "V"].includes(semester)) {
-      return res.status(400).json({
-        success: false,
-        error: "Only Semester I, III and V are enabled currently"
+        error: "Course/yearPart and roll number are required"
       });
     }
 
     if (!consentTelegramGroup) {
       return res.status(400).json({
         success: false,
-        error: "Telegram group consent is required for this MVP"
+        error: "Telegram group consent is required"
       });
     }
 
-    const yearPart = getYearPart(course, semester);
+    const yearPart = getYearPart(course || inputYearPart, semester, inputYearPart);
 
     const id = makeRegistrationKey({
       rollNo,
-      course,
-      semester,
+      course: course || yearPart,
+      semester: semester || "",
       resultType
     });
 
@@ -73,8 +67,8 @@ export default async function handler(req, res) {
 
     await ref.set({
       rollNo,
-      course,
-      semester,
+      course: course || yearPart,
+      semester: semester || "",
       yearPart,
       resultType,
       studentName,
@@ -94,13 +88,15 @@ export default async function handler(req, res) {
       rollNo,
       course,
       semester,
+      yearPart,
       resultType
     });
 
     return res.status(200).json({
       success: true,
       trackingId: id,
-      status: "waiting"
+      status: "waiting",
+      yearPart
     });
   } catch (err) {
     return safeJsonError(res, err);
