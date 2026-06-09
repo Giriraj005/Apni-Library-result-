@@ -183,7 +183,10 @@ async function selectDropdownByNormalizedText(page, selector, wantedText) {
   );
 
   if (exact) {
-    await page.selectOption(selector, exact.value || { label: exact.label });
+    await page.selectOption(selector, exact.value);
+    await page.locator(selector).dispatchEvent("change");
+    await page.waitForTimeout(800);
+
     return {
       selectedValue: exact.value,
       selectedLabel: exact.label,
@@ -197,7 +200,10 @@ async function selectDropdownByNormalizedText(page, selector, wantedText) {
   });
 
   if (loose) {
-    await page.selectOption(selector, loose.value || { label: loose.label });
+    await page.selectOption(selector, loose.value);
+    await page.locator(selector).dispatchEvent("change");
+    await page.waitForTimeout(800);
+
     return {
       selectedValue: loose.value,
       selectedLabel: loose.label,
@@ -228,6 +234,136 @@ async function findFirstVisible(page, selectors) {
   return "";
 }
 
+async function selectResultTypeIfAvailable(page, resultType) {
+  const selects = await page.locator("select").evaluateAll((items) => {
+    return items.map((select, index) => ({
+      index,
+      id: select.id || "",
+      name: select.name || "",
+      options: Array.from(select.options).map((option) => ({
+        value: option.value,
+        label: option.textContent.trim()
+      }))
+    }));
+  });
+
+  const typeSelect = selects.find((select) => {
+    const hay = `${select.id} ${select.name} ${select.options
+      .map((o) => `${o.label} ${o.value}`)
+      .join(" ")}`.toLowerCase();
+
+    return (
+      hay.includes("main") ||
+      hay.includes("reval") ||
+      hay.includes("supp") ||
+      hay.includes("result type")
+    );
+  });
+
+  if (!typeSelect) {
+    return {
+      selected: false,
+      reason: "result type dropdown not found"
+    };
+  }
+
+  const selector = typeSelect.id
+    ? `#${typeSelect.id}`
+    : typeSelect.name
+    ? `select[name="${typeSelect.name}"]`
+    : `select >> nth=${typeSelect.index}`;
+
+  const target = normalize(resultType || "MAIN");
+
+  const exact =
+    typeSelect.options.find((o) => normalize(o.label) === target) ||
+    typeSelect.options.find((o) => normalize(o.value) === target) ||
+    typeSelect.options.find((o) => normalize(o.label).includes(target)) ||
+    typeSelect.options.find((o) => normalize(o.value).includes(target));
+
+  if (!exact) {
+    return {
+      selected: false,
+      selector,
+      reason: "MAIN option not found",
+      available: typeSelect.options
+    };
+  }
+
+  await page.selectOption(selector, exact.value);
+  await page.locator(selector).dispatchEvent("change");
+  await page.waitForTimeout(500);
+
+  return {
+    selected: true,
+    selector,
+    value: exact.value,
+    label: exact.label
+  };
+}
+
+async function fillRollFields(page, rollNo) {
+  const selectors = [
+    "#txtfromNo",
+    'input[name="txtfromNo"]',
+    "#txtFromNo",
+    'input[name="txtFromNo"]',
+    "#txttoNo",
+    'input[name="txttoNo"]',
+    "#txtToNo",
+    'input[name="txtToNo"]',
+    "#txtRollNo",
+    'input[name="txtRollNo"]',
+    'input[id*="Roll" i]',
+    'input[name*="Roll" i]',
+    'input[type="text"]'
+  ];
+
+  const filled = [];
+
+  for (const selector of selectors) {
+    const loc = page.locator(selector);
+
+    try {
+      const count = await loc.count();
+
+      for (let i = 0; i < count; i++) {
+        const item = loc.nth(i);
+
+        if (!(await item.isVisible())) continue;
+
+        const currentValue = await item.inputValue().catch(() => "");
+        const name = await item.getAttribute("name").catch(() => "");
+        const id = await item.getAttribute("id").catch(() => "");
+
+        const key = `${id || ""}_${name || ""}_${i}`;
+
+        if (filled.find((x) => x.key === key)) continue;
+
+        await item.fill(String(rollNo));
+        await item.dispatchEvent("input");
+        await item.dispatchEvent("change");
+
+        filled.push({
+          key,
+          selector,
+          id,
+          name,
+          previousValue: currentValue
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!filled.length) {
+    throw new Error("Roll number input not found");
+  }
+
+  return filled;
+}
+
 async function clickSubmit(page) {
   const submitSelectors = [
     "#btnSave",
@@ -248,18 +384,14 @@ async function clickSubmit(page) {
     throw new Error("Submit button not found");
   }
 
-  await Promise.allSettled([
-    page.waitForLoadState("networkidle", { timeout: 15000 }),
-    page.locator(selector).first().click()
+  await page.locator(selector).first().click();
+
+  await Promise.race([
+    page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {}),
+    page.waitForTimeout(5000)
   ]);
 
-  try {
-    await page.waitForLoadState("networkidle", { timeout: 15000 });
-  } catch {
-    // ignore
-  }
-
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
 
   return selector;
 }
@@ -289,8 +421,7 @@ export async function fetchResultWithBrowser({
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process"
+        "--disable-gpu"
       ]
     });
 
@@ -305,16 +436,18 @@ export async function fetchResultWithBrowser({
 
     const page = await context.newPage();
 
-    page.setDefaultTimeout(25000);
+    page.setDefaultTimeout(30000);
 
     await page.goto(formUrl, {
       waitUntil: "domcontentloaded",
-      timeout: 30000
+      timeout: 45000
     });
 
     await page.waitForLoadState("networkidle", {
-      timeout: 20000
+      timeout: 25000
     }).catch(() => {});
+
+    const beforeUrl = page.url();
 
     const yearSelectSelector =
       (await findFirstVisible(page, [
@@ -329,23 +462,16 @@ export async function fetchResultWithBrowser({
       yearPart
     );
 
-    const rollSelector = await findFirstVisible(page, [
-      "#txtfromNo",
-      'input[name="txtfromNo"]',
-      "#txtRollNo",
-      'input[name="txtRollNo"]',
-      'input[id*="Roll" i]',
-      'input[name*="Roll" i]',
-      'input[type="text"]'
-    ]);
+    const resultTypeSelection = await selectResultTypeIfAvailable(
+      page,
+      resultType || "MAIN"
+    );
 
-    if (!rollSelector) {
-      throw new Error("Roll number input not found");
-    }
-
-    await page.locator(rollSelector).first().fill(String(rollNo));
+    const filledRollFields = await fillRollFields(page, rollNo);
 
     const clickedSelector = await clickSubmit(page);
+
+    const afterUrl = page.url();
 
     const bodyText = stripText(await page.locator("body").innerText());
     const tableText = stripText(await extractTableText(page));
@@ -365,10 +491,12 @@ export async function fetchResultWithBrowser({
 
     const screenshotBase64 =
       process.env.INCLUDE_SCREENSHOT === "true"
-        ? await page.screenshot({
-            fullPage: true,
-            type: "png"
-          }).then((buffer) => buffer.toString("base64"))
+        ? await page
+            .screenshot({
+              fullPage: true,
+              type: "png"
+            })
+            .then((buffer) => buffer.toString("base64"))
         : null;
 
     await browser.close();
@@ -383,10 +511,13 @@ export async function fetchResultWithBrowser({
       resultStatus: status.status,
       reason: status.reason,
       selected: {
+        beforeUrl,
+        afterUrl,
         dropdownSelector: yearSelectSelector,
         selectedValue: selected.selectedValue,
         selectedLabel: selected.selectedLabel,
-        rollSelector,
+        resultTypeSelection,
+        filledRollFields,
         clickedSelector
       },
       marksSummary,
@@ -409,4 +540,4 @@ export async function fetchResultWithBrowser({
       durationMs: Date.now() - startedAt
     };
   }
-      }
+    }
