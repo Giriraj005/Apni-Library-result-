@@ -1,0 +1,15 @@
+{
+  "name": "pdusu-result-worker",
+  "version": "1.0.0",
+  "description": "Browser worker for PDUSU result fetching using Playwright",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "npx playwright install chromium --with-deps"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.46.0"
+  }
+}
