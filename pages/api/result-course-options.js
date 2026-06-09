@@ -15,6 +15,24 @@ function getWorkerConfig() {
   };
 }
 
+async function fetchWithTimeout(url, timeoutMs = 9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+
+    clearTimeout(timer);
+    return response;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
 async function fetchWorkerOptions(form) {
   const { workerUrl, workerSecret } = getWorkerConfig();
 
@@ -30,25 +48,30 @@ async function fetchWorkerOptions(form) {
     workerSecret
   )}&url=${encodeURIComponent(form.url)}`;
 
-  const response = await fetch(url, {
-    method: "GET"
-  });
+  try {
+    const response = await fetchWithTimeout(url, 9000);
+    const data = await response.json().catch(() => null);
 
-  const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.success) {
+      return {
+        success: false,
+        error: data?.error || `Worker failed: ${response.status}`,
+        form
+      };
+    }
 
-  if (!response.ok || !data?.success) {
+    return {
+      success: true,
+      form,
+      data
+    };
+  } catch (err) {
     return {
       success: false,
-      error: data?.error || `Worker failed: ${response.status}`,
+      error: err.name === "AbortError" ? "Worker options timeout" : err.message,
       form
     };
   }
-
-  return {
-    success: true,
-    form,
-    data
-  };
 }
 
 function looksLikeYearPartOption(text = "") {
@@ -77,7 +100,9 @@ function looksLikeYearPartOption(text = "") {
 }
 
 function selectLooksLikeYearPart(select) {
-  const hay = `${select.id || ""} ${select.name || ""} ${select.label || ""}`.toUpperCase();
+  const hay = `${select.id || ""} ${select.name || ""} ${
+    select.label || ""
+  }`.toUpperCase();
 
   if (hay.includes("RESULT TYPE")) return false;
 
@@ -104,7 +129,6 @@ function extractOptionsFromFetch(fetchResult) {
   const selects = fetchResult.data?.selects || [];
 
   const yearSelects = selects.filter(selectLooksLikeYearPart);
-
   const options = [];
 
   for (const select of yearSelects) {
@@ -249,6 +273,8 @@ export default async function handler(req, res) {
     const options = mergeFallbackOptions(workerOptions);
     const groups = buildGroups(options);
 
+    res.setHeader("Cache-Control", "s-maxage=120, stale-while-revalidate=600");
+
     return res.status(200).json({
       success: true,
       source: workerOptions.length ? "worker+fallback" : "fallback",
@@ -265,9 +291,18 @@ export default async function handler(req, res) {
       options
     });
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      error: err.message || "Failed to load result options"
+    const options = dedupeOptions(FALLBACK_RESULT_OPTIONS);
+    const groups = buildGroups(options);
+
+    return res.status(200).json({
+      success: true,
+      source: "fallback",
+      totalOptions: options.length,
+      formsChecked: RESULT_FORM_CANDIDATES.length,
+      workerResults: [],
+      groups,
+      options,
+      fallbackReason: err.message || "Failed to load live result options"
     });
   }
       }
