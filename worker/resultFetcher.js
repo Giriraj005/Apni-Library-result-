@@ -20,6 +20,38 @@ function normalize(value) {
     .replace(/[^A-Z0-9]+/g, "");
 }
 
+async function setupFastPage(page) {
+  await page.route("**/*", async (route) => {
+    const resourceType = route.request().resourceType();
+
+    if (["image", "font", "media"].includes(resourceType)) {
+      return route.abort();
+    }
+
+    return route.continue();
+  });
+}
+
+async function gotoResultPage(page, url) {
+  try {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 45000
+    });
+  } catch {
+    await page.goto(url, {
+      waitUntil: "commit",
+      timeout: 60000
+    });
+  }
+
+  await page.waitForSelector("select", {
+    timeout: 45000
+  });
+
+  await page.waitForTimeout(1200);
+}
+
 function detectCaptcha(text) {
   const lower = String(text || "").toLowerCase();
 
@@ -432,14 +464,8 @@ export async function fetchOptionsWithBrowser({ url }) {
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
 
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 45000
-    });
-
-    await page.waitForLoadState("networkidle", {
-      timeout: 25000
-    }).catch(() => {});
+    await setupFastPage(page);
+    await gotoResultPage(page, url);
 
     const finalUrl = page.url();
 
@@ -519,14 +545,8 @@ export async function fetchResultWithBrowser({
 
     page.setDefaultTimeout(30000);
 
-    await page.goto(formUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 45000
-    });
-
-    await page.waitForLoadState("networkidle", {
-      timeout: 25000
-    }).catch(() => {});
+    await setupFastPage(page);
+    await gotoResultPage(page, formUrl);
 
     const beforeUrl = page.url();
 
