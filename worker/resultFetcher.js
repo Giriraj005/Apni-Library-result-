@@ -404,6 +404,87 @@ async function extractTableText(page) {
   return tableTexts.join("\n\n");
 }
 
+export async function fetchOptionsWithBrowser({ url }) {
+  let browser = null;
+
+  const startedAt = Date.now();
+
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
+
+    const context = await browser.newContext({
+      viewport: {
+        width: 1366,
+        height: 768
+      },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    });
+
+    const page = await context.newPage();
+    page.setDefaultTimeout(30000);
+
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 45000
+    });
+
+    await page.waitForLoadState("networkidle", {
+      timeout: 25000
+    }).catch(() => {});
+
+    const finalUrl = page.url();
+
+    const selects = await page.locator("select").evaluateAll((items) => {
+      return items.map((select, index) => ({
+        index,
+        id: select.id || "",
+        name: select.name || "",
+        label:
+          select.closest("tr")?.innerText?.split("\n")?.[0]?.trim() ||
+          select.parentElement?.innerText?.split("\n")?.[0]?.trim() ||
+          "",
+        options: Array.from(select.options)
+          .map((option) => ({
+            value: option.value,
+            label: option.textContent.trim()
+          }))
+          .filter((option) => option.value || option.label)
+      }));
+    });
+
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+
+    await browser.close();
+
+    return {
+      success: true,
+      url,
+      finalUrl,
+      selects,
+      textPreview: bodyText.slice(0, 1000),
+      durationMs: Date.now() - startedAt
+    };
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+
+    return {
+      success: false,
+      url,
+      error: err.message || "Failed to fetch options",
+      durationMs: Date.now() - startedAt
+    };
+  }
+}
+
 export async function fetchResultWithBrowser({
   rollNo,
   yearPart,
@@ -476,7 +557,9 @@ export async function fetchResultWithBrowser({
     const bodyText = stripText(await page.locator("body").innerText());
     const tableText = stripText(await extractTableText(page));
 
-    const combinedText = stripText([bodyText, tableText].filter(Boolean).join("\n\n"));
+    const combinedText = stripText(
+      [bodyText, tableText].filter(Boolean).join("\n\n")
+    );
 
     const status = detectResultStatus({
       text: combinedText,
@@ -540,4 +623,4 @@ export async function fetchResultWithBrowser({
       durationMs: Date.now() - startedAt
     };
   }
-    }
+}
