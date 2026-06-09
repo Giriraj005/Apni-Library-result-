@@ -1,15 +1,12 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
-import {
-  detectResultStatus,
-  submitAspNetResultForm
-} from "../../lib/resultParser";
 import { makeResultEventKey } from "../../lib/resultQueue";
 import { sendTelegramMessage } from "../../lib/telegram";
+import { sendWhatsAppStudentResult } from "../../lib/whatsapp";
 import { logEvent } from "../../lib/logger";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 3;
 const MAX_ATTEMPTS = 3;
 
 function escapeTelegram(value) {
@@ -19,29 +16,186 @@ function escapeTelegram(value) {
     .replace(/>/g, "&gt;");
 }
 
-function buildMarksMessage({ rollNo, yearPart, resultType, officialUrl, marksSummary }) {
+function getWorkerUrl() {
+  const url = process.env.WORKER_URL;
+
+  if (!url) {
+    throw new Error("WORKER_URL is missing");
+  }
+
+  return url.replace(/\/+$/, "");
+}
+
+function getWorkerSecret() {
+  if (!process.env.WORKER_SECRET) {
+    throw new Error("WORKER_SECRET is missing");
+  }
+
+  return process.env.WORKER_SECRET;
+}
+
+function compactMarksSummary(text = "") {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+
+  if (!raw) return "";
+
+  const firstBlock = raw.split(" DISCLAIMER ")[0];
+
+  const parts = [];
+
+  const identityMatch = firstBlock.match(
+    /PROVISIONAL MARKSHEET[\s\S]*?College Name\s*:\s*[\s\S]*?(?=PAPER TYPE|COURSE CODE)/i
+  );
+
+  if (identityMatch?.[0]) {
+    parts.push(identityMatch[0].trim());
+  }
+
+  const semesterResultMatch = firstBlock.match(
+    /SEMESTER RESULT[\s\S]*?(?=DETAILS OF BACKLOG|FINAL REMARK|RESULT REMARKS|GRADING)/i
+  );
+
+  if (semesterResultMatch?.[0]) {
+    parts.push(semesterResultMatch[0].trim());
+  }
+
+  const subjectLines = [];
+  const subjectRegex =
+    /((DSE|MAJOR|MINOR|VAC|SEC|AEC)\s+[A-Z0-9]+\s+[\s\S]*?\s+\d+\s+\d+\s+[-\d]+\s+[-\d]+\s+-?\s+\d+\s+\d+\s+\d+\s+[A-Z+]+\s+\d+\s+\d+)/gi;
+
+  let sm;
+
+  while ((sm = subjectRegex.exec(firstBlock))) {
+    subjectLines.push(sm[1].trim().replace(/\s+/g, " "));
+    if (subjectLines.length >= 10) break;
+  }
+
+  if (subjectLines.length) {
+    parts.push(`Papers:\n${subjectLines.join("\n")}`);
+  }
+
+  let summary = parts.filter(Boolean).join("\n\n").trim();
+
+  if (!summary) {
+    summary = firstBlock.slice(0, 3500);
+  }
+
+  return summary.slice(0, 3600);
+}
+
+function makeWhatsAppShortSummary(text = "") {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+
+  const totalMatch = raw.match(
+    /FIRST SEMESTER\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([-\d.]+|---)\s+([A-Z]+)/i
+  );
+
+  if (totalMatch) {
+    return `Total Marks: ${totalMatch[2]}/${totalMatch[1]}, SGPA: ${totalMatch[7]}, Result: ${totalMatch[9]}`;
+  }
+
+  const totalMarks = raw.match(/TOTAL MARKS\s+(\d+)/i)?.[1];
+  const sgpa = raw.match(/\bSGPA\s+([\d.]+)/i)?.[1];
+  const result = raw.match(/\b(PAPR|FAPR|BKPR|PASS|FAIL|PROMOTED)\b/i)?.[1];
+
+  const parts = [];
+
+  if (totalMarks) parts.push(`Total Marks: ${totalMarks}`);
+  if (sgpa) parts.push(`SGPA: ${sgpa}`);
+  if (result) parts.push(`Result: ${result.toUpperCase()}`);
+
+  return parts.length
+    ? parts.join(", ")
+    : "Result found. Please check the official result link for full marksheet.";
+}
+
+function buildAdminMarksMessage({
+  rollNo,
+  yearPart,
+  resultType,
+  officialUrl,
+  marksSummary,
+  studentName,
+  mobile
+}) {
+  const cleanSummary = compactMarksSummary(marksSummary);
+
   return [
-    "✅ <b>Result Found</b>",
+    "✅ <b>Registered Student Result Found</b>",
     "",
+    studentName ? `<b>Name:</b> ${escapeTelegram(studentName)}` : "",
+    mobile ? `<b>Mobile:</b> ${escapeTelegram(mobile)}` : "",
     `<b>Roll No:</b> ${escapeTelegram(rollNo)}`,
     `<b>Course:</b> ${escapeTelegram(yearPart)}`,
     `<b>Type:</b> ${escapeTelegram(resultType || "MAIN")}`,
     "",
     "<b>Marks / Result Preview:</b>",
-    escapeTelegram(String(marksSummary || "").slice(0, 3200)),
+    escapeTelegram(
+      cleanSummary ||
+        "Result found. Please open official link for full marksheet."
+    ),
     "",
     "<b>Official Link:</b>",
     officialUrl,
     "",
+    "Note: This is an auto-fetched preview from the official university result portal.",
+    "",
     "Source: Official University Result Portal"
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function fetchResultFromWorker({ rollNo, yearPart, resultType, formUrl }) {
+  const workerUrl = getWorkerUrl();
+  const secret = getWorkerSecret();
+
+  const response = await fetch(`${workerUrl}/fetch-result`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-worker-secret": secret
+    },
+    body: JSON.stringify({
+      secret,
+      rollNo,
+      yearPart,
+      resultType,
+      formUrl
+    })
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || !data) {
+    throw new Error(
+      data?.error || `Worker failed with status ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+async function getRegistration(item) {
+  if (!item.registrationId) return null;
+
+  const snap = await db
+    .collection("result_registrations")
+    .doc(item.registrationId)
+    .get();
+
+  return snap.exists ? snap.data() : null;
 }
 
 export default async function handler(req, res) {
   try {
     requireCron(req);
 
-    const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
+    const sourceSnap = await db
+      .collection("result_sources")
+      .doc("pdusu_main")
+      .get();
+
     const source = sourceSnap.exists ? sourceSnap.data() : {};
 
     if (source.automaticCheckingPaused) {
@@ -61,22 +215,27 @@ export default async function handler(req, res) {
     if (queueSnap.empty) {
       return res.status(200).json({
         success: true,
-        processed: 0
+        processed: 0,
+        found: 0,
+        failed: 0
       });
     }
 
     let processed = 0;
     let found = 0;
     let failed = 0;
+    const results = [];
 
     for (const doc of queueSnap.docs) {
       const item = doc.data();
       processed += 1;
 
+      const attempts = (item.attempts || 0) + 1;
+
       await doc.ref.set(
         {
           status: "checking",
-          attempts: (item.attempts || 0) + 1,
+          attempts,
           updatedAt: FieldValue.serverTimestamp()
         },
         {
@@ -85,37 +244,18 @@ export default async function handler(req, res) {
       );
 
       try {
+        const registration = await getRegistration(item);
+
         const formUrl = item.formUrl || getFormUrlForYearPart(item.yearPart);
 
-        const out = await submitAspNetResultForm({
-          formUrl,
+        const workerResult = await fetchResultFromWorker({
+          rollNo: item.rollNo,
           yearPart: item.yearPart,
           resultType: item.resultType || "MAIN",
-          rollNo: item.rollNo
+          formUrl
         });
 
-        const status = detectResultStatus(out.html, item.rollNo);
-
-        if (status.status === "captcha_detected") {
-          await db.collection("result_sources").doc("pdusu_main").set(
-            {
-              automaticCheckingPaused: true,
-              status: "captcha_detected",
-              updatedAt: FieldValue.serverTimestamp()
-            },
-            {
-              merge: true
-            }
-          );
-
-          await logEvent("queue", "error", "CAPTCHA detected, automatic checking paused", {
-            queueId: doc.id
-          });
-
-          break;
-        }
-
-        if (status.resultFound) {
+        if (workerResult.resultFound) {
           const resultId = makeResultEventKey({
             rollNo: item.rollNo,
             yearPart: item.yearPart,
@@ -125,21 +265,57 @@ export default async function handler(req, res) {
 
           const outputRef = db.collection("result_outputs").doc(resultId);
           const outputSnap = await outputRef.get();
-          const alreadySent = outputSnap.exists && outputSnap.data().telegramSent;
+          const outputOld = outputSnap.exists ? outputSnap.data() : {};
 
-          let telegramResult = null;
+          const adminTelegramAlreadySent = Boolean(
+            outputOld.adminTelegramSent
+          );
 
-          if (!alreadySent) {
-            telegramResult = await sendTelegramMessage({
-              chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
-              text: buildMarksMessage({
+          const studentWhatsAppAlreadySent = Boolean(
+            outputOld.studentWhatsAppSent
+          );
+
+          let adminTelegramResult = null;
+          let studentWhatsApp = null;
+
+          if (!adminTelegramAlreadySent) {
+            adminTelegramResult = await sendTelegramMessage({
+              chatId:
+                process.env.TELEGRAM_RESULT_ADMIN_CHAT_ID ||
+                process.env.TELEGRAM_ADMIN_CHAT_ID ||
+                process.env.TELEGRAM_PUBLIC_CHAT_ID,
+              text: buildAdminMarksMessage({
                 rollNo: item.rollNo,
                 yearPart: item.yearPart,
                 resultType: item.resultType || "MAIN",
                 officialUrl: formUrl,
-                marksSummary: status.marksSummary || status.textPreview
+                marksSummary:
+                  workerResult.marksSummary ||
+                  workerResult.textPreview ||
+                  "",
+                studentName: registration?.studentName || "",
+                mobile: registration?.mobile || ""
               })
             });
+          }
+
+          if (registration?.mobile && !studentWhatsAppAlreadySent) {
+            try {
+              studentWhatsApp = await sendWhatsAppStudentResult({
+                to: registration.mobile,
+                rollNo: item.rollNo,
+                yearPart: item.yearPart,
+                resultSummary: makeWhatsAppShortSummary(
+                  workerResult.marksSummary || workerResult.textPreview || ""
+                ),
+                officialUrl: formUrl
+              });
+            } catch (err) {
+              studentWhatsApp = {
+                success: false,
+                error: err.message
+              };
+            }
           }
 
           await outputRef.set(
@@ -147,13 +323,27 @@ export default async function handler(req, res) {
               rollNo: item.rollNo,
               yearPart: item.yearPart,
               resultType: item.resultType || "MAIN",
-              resultText: status.fullText || status.textPreview,
-              marksSummary: status.marksSummary || "",
-              textPreview: status.textPreview,
+              resultText: workerResult.textPreview || "",
+              marksSummary: workerResult.marksSummary || "",
               officialUrl: formUrl,
-              telegramSent: true,
-              telegramSentAt: FieldValue.serverTimestamp(),
-              telegramMessageId: telegramResult?.message_id || outputSnap.data()?.telegramMessageId || null,
+              workerResultStatus: workerResult.resultStatus || "",
+              workerReason: workerResult.reason || "",
+              selected: workerResult.selected || {},
+
+              adminTelegramSent: true,
+              adminTelegramSentAt: FieldValue.serverTimestamp(),
+              adminTelegramMessageId:
+                adminTelegramResult?.message_id ||
+                outputOld.adminTelegramMessageId ||
+                null,
+
+              studentWhatsAppSent:
+                studentWhatsApp?.success || outputOld.studentWhatsAppSent || false,
+              studentWhatsApp,
+              studentWhatsAppSentAt: studentWhatsApp?.success
+                ? FieldValue.serverTimestamp()
+                : outputOld.studentWhatsAppSentAt || null,
+
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
             },
@@ -167,6 +357,7 @@ export default async function handler(req, res) {
               status: "result_found",
               resultFound: true,
               resultId,
+              workerResultStatus: workerResult.resultStatus || "",
               updatedAt: FieldValue.serverTimestamp()
             },
             {
@@ -175,33 +366,67 @@ export default async function handler(req, res) {
           );
 
           if (item.registrationId) {
-            await db.collection("result_registrations").doc(item.registrationId).set(
-              {
-                status: "result_found",
-                resultFound: true,
-                resultId,
-                telegramSent: true,
-                telegramSentAt: FieldValue.serverTimestamp(),
-                telegramMessageId: telegramResult?.message_id || outputSnap.data()?.telegramMessageId || null,
-                updatedAt: FieldValue.serverTimestamp()
-              },
-              {
-                merge: true
-              }
-            );
+            await db
+              .collection("result_registrations")
+              .doc(item.registrationId)
+              .set(
+                {
+                  status: "result_found",
+                  resultFound: true,
+                  resultId,
+
+                  adminTelegramSent: true,
+                  adminTelegramSentAt: FieldValue.serverTimestamp(),
+                  adminTelegramMessageId:
+                    adminTelegramResult?.message_id ||
+                    outputOld.adminTelegramMessageId ||
+                    null,
+
+                  studentWhatsAppSent:
+                    studentWhatsApp?.success ||
+                    outputOld.studentWhatsAppSent ||
+                    false,
+                  studentWhatsApp,
+
+                  updatedAt: FieldValue.serverTimestamp()
+                },
+                {
+                  merge: true
+                }
+              );
           }
 
           found += 1;
+
+          results.push({
+            queueId: doc.id,
+            rollNo: item.rollNo,
+            yearPart: item.yearPart,
+            status: "result_found",
+            adminTelegramSent: true,
+            studentWhatsAppSent:
+              studentWhatsApp?.success ||
+              outputOld.studentWhatsAppSent ||
+              false,
+            studentWhatsAppError:
+              studentWhatsApp && !studentWhatsApp.success
+                ? studentWhatsApp.error
+                : ""
+          });
         } else {
-          const attempts = (item.attempts || 0) + 1;
-          const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+          const finalStatus =
+            attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
           await doc.ref.set(
             {
               status: finalStatus,
               resultFound: false,
-              lastError: status.reason,
-              lastTextPreview: status.textPreview,
+              workerResultStatus: workerResult.resultStatus || "",
+              lastError:
+                workerResult.reason ||
+                workerResult.error ||
+                "Result not found",
+              lastTextPreview: workerResult.textPreview || "",
               updatedAt: FieldValue.serverTimestamp()
             },
             {
@@ -210,24 +435,35 @@ export default async function handler(req, res) {
           );
 
           if (item.registrationId) {
-            await db.collection("result_registrations").doc(item.registrationId).set(
-              {
-                status: finalStatus,
-                updatedAt: FieldValue.serverTimestamp()
-              },
-              {
-                merge: true
-              }
-            );
+            await db
+              .collection("result_registrations")
+              .doc(item.registrationId)
+              .set(
+                {
+                  status: finalStatus,
+                  updatedAt: FieldValue.serverTimestamp()
+                },
+                {
+                  merge: true
+                }
+              );
           }
 
           failed += 1;
+
+          results.push({
+            queueId: doc.id,
+            rollNo: item.rollNo,
+            yearPart: item.yearPart,
+            status: finalStatus,
+            reason: workerResult.reason || workerResult.error || ""
+          });
         }
       } catch (err) {
         failed += 1;
 
-        const attempts = (item.attempts || 0) + 1;
-        const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+        const finalStatus =
+          attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
         await doc.ref.set(
           {
@@ -243,20 +479,30 @@ export default async function handler(req, res) {
         await logEvent("queue", "error", err.message, {
           queueId: doc.id
         });
+
+        results.push({
+          queueId: doc.id,
+          rollNo: item.rollNo,
+          yearPart: item.yearPart,
+          status: finalStatus,
+          error: err.message
+        });
       }
     }
 
-    await logEvent("queue", "info", "Queue processing completed", {
+    await logEvent("queue", "info", "Queue processing completed with worker", {
       processed,
       found,
-      failed
+      failed,
+      results
     });
 
     return res.status(200).json({
       success: true,
       processed,
       found,
-      failed
+      failed,
+      results
     });
   } catch (err) {
     await logEvent("queue", "error", err.message, {});
