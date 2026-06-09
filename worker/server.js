@@ -1,5 +1,8 @@
 import express from "express";
-import { fetchResultWithBrowser } from "./resultFetcher.js";
+import {
+  fetchResultWithBrowser,
+  fetchOptionsWithBrowser
+} from "./resultFetcher.js";
 
 const app = express();
 
@@ -35,6 +38,28 @@ app.get("/health", (req, res) => {
     status: "ok",
     time: new Date().toISOString()
   });
+});
+
+app.get("/fetch-options", requireWorkerSecret, async (req, res) => {
+  try {
+    const url = String(req.query.url || "").trim();
+
+    if (!url) {
+      return res.status(400).json({
+        success: false,
+        error: "url is required"
+      });
+    }
+
+    const result = await fetchOptionsWithBrowser({ url });
+
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Fetch options failed"
+    });
+  }
 });
 
 app.get("/fetch-result", requireWorkerSecret, async (req, res) => {
