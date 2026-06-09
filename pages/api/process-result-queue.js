@@ -2,7 +2,7 @@ import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
 import { makeResultEventKey } from "../../lib/resultQueue";
 import { sendTelegramMessage } from "../../lib/telegram";
-import { sendWhatsAppStudentResult } from "../../lib/whatsapp";
+import { sendWhatsAppStudentResultAuto } from "../../lib/whatsapp";
 import { logEvent } from "../../lib/logger";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
@@ -300,22 +300,15 @@ export default async function handler(req, res) {
           }
 
           if (registration?.mobile && !studentWhatsAppAlreadySent) {
-            try {
-              studentWhatsApp = await sendWhatsAppStudentResult({
-                to: registration.mobile,
-                rollNo: item.rollNo,
-                yearPart: item.yearPart,
-                resultSummary: makeWhatsAppShortSummary(
-                  workerResult.marksSummary || workerResult.textPreview || ""
-                ),
-                officialUrl: formUrl
-              });
-            } catch (err) {
-              studentWhatsApp = {
-                success: false,
-                error: err.message
-              };
-            }
+            studentWhatsApp = await sendWhatsAppStudentResultAuto({
+              to: registration.mobile,
+              rollNo: item.rollNo,
+              yearPart: item.yearPart,
+              resultSummary: makeWhatsAppShortSummary(
+                workerResult.marksSummary || workerResult.textPreview || ""
+              ),
+              officialUrl: formUrl
+            });
           }
 
           await outputRef.set(
@@ -338,11 +331,18 @@ export default async function handler(req, res) {
                 null,
 
               studentWhatsAppSent:
-                studentWhatsApp?.success || outputOld.studentWhatsAppSent || false,
-              studentWhatsApp,
+                studentWhatsApp?.success ||
+                outputOld.studentWhatsAppSent ||
+                false,
+              studentWhatsApp:
+                studentWhatsApp || outputOld.studentWhatsApp || null,
               studentWhatsAppSentAt: studentWhatsApp?.success
                 ? FieldValue.serverTimestamp()
                 : outputOld.studentWhatsAppSentAt || null,
+              studentWhatsAppLastError:
+                studentWhatsApp && !studentWhatsApp.success
+                  ? studentWhatsApp.error
+                  : outputOld.studentWhatsAppLastError || "",
 
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
@@ -386,7 +386,12 @@ export default async function handler(req, res) {
                     studentWhatsApp?.success ||
                     outputOld.studentWhatsAppSent ||
                     false,
-                  studentWhatsApp,
+                  studentWhatsApp:
+                    studentWhatsApp || outputOld.studentWhatsApp || null,
+                  studentWhatsAppLastError:
+                    studentWhatsApp && !studentWhatsApp.success
+                      ? studentWhatsApp.error
+                      : outputOld.studentWhatsAppLastError || "",
 
                   updatedAt: FieldValue.serverTimestamp()
                 },
@@ -408,6 +413,10 @@ export default async function handler(req, res) {
               studentWhatsApp?.success ||
               outputOld.studentWhatsAppSent ||
               false,
+            studentWhatsAppMethod:
+              studentWhatsApp?.method ||
+              outputOld.studentWhatsApp?.method ||
+              "",
             studentWhatsAppError:
               studentWhatsApp && !studentWhatsApp.success
                 ? studentWhatsApp.error
@@ -508,4 +517,4 @@ export default async function handler(req, res) {
     await logEvent("queue", "error", err.message, {});
     return safeJsonError(res, err);
   }
-}
+                       }
