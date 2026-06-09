@@ -134,9 +134,7 @@ function dedupeOptions(options) {
   const map = new Map();
 
   for (const option of options) {
-    const key = normalizeCourseKey(
-      `${option.label}_${option.formUrl}_${option.formKey}`
-    );
+    const key = normalizeCourseKey(`${option.label}_${option.formUrl}`);
 
     if (!map.has(key)) {
       map.set(key, option);
@@ -148,12 +146,30 @@ function dedupeOptions(options) {
   );
 }
 
+function mergeFallbackOptions(workerOptions) {
+  const merged = [...workerOptions];
+
+  for (const fallback of FALLBACK_RESULT_OPTIONS) {
+    const exists = merged.some(
+      (option) =>
+        normalizeCourseKey(option.label) === normalizeCourseKey(fallback.label) &&
+        String(option.formUrl || "") === String(fallback.formUrl || "")
+    );
+
+    if (!exists) {
+      merged.push(fallback);
+    }
+  }
+
+  return dedupeOptions(merged);
+}
+
 function buildGroups(options) {
   const baseGroups = [
     {
       id: "all",
       label: "All Live Result Options",
-      subtitle: "Worker se fetched exact dropdown options",
+      subtitle: "Worker + fallback exact dropdown options",
       options: []
     },
     {
@@ -230,16 +246,12 @@ export default async function handler(req, res) {
     });
 
     const workerOptions = workerResults.flatMap(extractOptionsFromFetch);
-
-    const options = dedupeOptions(
-      workerOptions.length ? workerOptions : FALLBACK_RESULT_OPTIONS
-    );
-
+    const options = mergeFallbackOptions(workerOptions);
     const groups = buildGroups(options);
 
     return res.status(200).json({
       success: true,
-      source: workerOptions.length ? "worker" : "fallback",
+      source: workerOptions.length ? "worker+fallback" : "fallback",
       totalOptions: options.length,
       formsChecked: RESULT_FORM_CANDIDATES.length,
       workerResults: workerResults.map((item) => ({
