@@ -260,11 +260,13 @@ export default function ResultAlertPage() {
             <div className="hidden rounded-2xl border border-amber-200 bg-white/80 px-4 py-3 text-right shadow-sm sm:block">
               <p className="text-xs font-semibold text-slate-500">Options</p>
               <p className="text-sm font-bold text-emerald-700">
-                {source === "worker"
-                  ? "Live Dropdowns"
-                  : source === "loading"
-                  ? "Loading..."
-                  : "Fallback"}
+                {source === "worker+fallback"
+  ? "Live + Fallback"
+  : source === "worker"
+  ? "Live Dropdowns"
+  : source === "loading"
+  ? "Loading..."
+  : "Fallback"}
               </p>
             </div>
           </div>
