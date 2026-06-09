@@ -85,6 +85,19 @@ export default async function handler(req, res) {
       formUrl
     });
 
+    if (!workerResult.success) {
+      return res.status(200).json({
+        success: false,
+        source: "railway_worker",
+        rollNo,
+        yearPart,
+        resultType,
+        formUrl,
+        error: workerResult.error || "Worker failed",
+        workerResult
+      });
+    }
+
     return res.status(200).json({
       success: true,
       source: "railway_worker",
