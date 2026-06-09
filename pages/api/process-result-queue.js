@@ -1,43 +1,40 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
+import {
+  detectResultStatus,
+  submitAspNetResultForm
+} from "../../lib/resultParser";
 import { makeResultEventKey } from "../../lib/resultQueue";
+import { sendTelegramMessage } from "../../lib/telegram";
 import { logEvent } from "../../lib/logger";
+import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
 const BATCH_SIZE = 10;
 const MAX_ATTEMPTS = 3;
 
-async function callWorker({ formUrl, yearPart, resultType, rollNo }) {
-  if (!process.env.WORKER_URL) {
-    throw new Error("WORKER_URL missing in Vercel env");
-  }
+function escapeTelegram(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
-  if (!process.env.WORKER_SECRET) {
-    throw new Error("WORKER_SECRET missing in Vercel env");
-  }
-
-  const response = await fetch(`${process.env.WORKER_URL}/fetch-result`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-worker-secret": process.env.WORKER_SECRET
-    },
-    body: JSON.stringify({
-      formUrl,
-      yearPart,
-      resultType,
-      rollNo,
-      sendTelegram: true
-    }),
-    signal: AbortSignal.timeout(55000)
-  });
-
-  const data = await response.json();
-
-  if (!response.ok || !data.success) {
-    throw new Error(data.error || "Worker fetch failed");
-  }
-
-  return data;
+function buildMarksMessage({ rollNo, yearPart, resultType, officialUrl, marksSummary }) {
+  return [
+    "✅ <b>Result Found</b>",
+    "",
+    `<b>Roll No:</b> ${escapeTelegram(rollNo)}`,
+    `<b>Course:</b> ${escapeTelegram(yearPart)}`,
+    `<b>Type:</b> ${escapeTelegram(resultType || "MAIN")}`,
+    "",
+    "<b>Marks / Result Preview:</b>",
+    escapeTelegram(String(marksSummary || "").slice(0, 3200)),
+    "",
+    "<b>Official Link:</b>",
+    officialUrl,
+    "",
+    "Source: Official University Result Portal"
+  ].join("\n");
 }
 
 export default async function handler(req, res) {
@@ -46,14 +43,6 @@ export default async function handler(req, res) {
 
     const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
     const source = sourceSnap.exists ? sourceSnap.data() : {};
-    const formUrl = source.activeNepResultUrl;
-
-    if (!formUrl) {
-      return res.status(200).json({
-        success: true,
-        status: "no_form_url"
-      });
-    }
 
     if (source.automaticCheckingPaused) {
       return res.status(200).json({
@@ -84,43 +73,49 @@ export default async function handler(req, res) {
       const item = doc.data();
       processed += 1;
 
-      const nextAttempt = (item.attempts || 0) + 1;
-
       await doc.ref.set(
         {
           status: "checking",
-          attempts: nextAttempt,
+          attempts: (item.attempts || 0) + 1,
           updatedAt: FieldValue.serverTimestamp()
         },
-        { merge: true }
+        {
+          merge: true
+        }
       );
 
       try {
-        const workerResult = await callWorker({
+        const formUrl = item.formUrl || getFormUrlForYearPart(item.yearPart);
+
+        const out = await submitAspNetResultForm({
           formUrl,
           yearPart: item.yearPart,
           resultType: item.resultType || "MAIN",
           rollNo: item.rollNo
         });
 
-        if (workerResult.status === "captcha_detected") {
+        const status = detectResultStatus(out.html, item.rollNo);
+
+        if (status.status === "captcha_detected") {
           await db.collection("result_sources").doc("pdusu_main").set(
             {
               automaticCheckingPaused: true,
               status: "captcha_detected",
               updatedAt: FieldValue.serverTimestamp()
             },
-            { merge: true }
+            {
+              merge: true
+            }
           );
 
-          await logEvent("queue", "error", "CAPTCHA detected by worker", {
+          await logEvent("queue", "error", "CAPTCHA detected, automatic checking paused", {
             queueId: doc.id
           });
 
           break;
         }
 
-        if (workerResult.resultFound) {
+        if (status.resultFound) {
           const resultId = makeResultEventKey({
             rollNo: item.rollNo,
             yearPart: item.yearPart,
@@ -128,23 +123,43 @@ export default async function handler(req, res) {
             targetYear: process.env.TARGET_RESULT_YEAR
           });
 
-          await db.collection("result_outputs").doc(resultId).set(
+          const outputRef = db.collection("result_outputs").doc(resultId);
+          const outputSnap = await outputRef.get();
+          const alreadySent = outputSnap.exists && outputSnap.data().telegramSent;
+
+          let telegramResult = null;
+
+          if (!alreadySent) {
+            telegramResult = await sendTelegramMessage({
+              chatId: process.env.TELEGRAM_PUBLIC_CHAT_ID,
+              text: buildMarksMessage({
+                rollNo: item.rollNo,
+                yearPart: item.yearPart,
+                resultType: item.resultType || "MAIN",
+                officialUrl: formUrl,
+                marksSummary: status.marksSummary || status.textPreview
+              })
+            });
+          }
+
+          await outputRef.set(
             {
               rollNo: item.rollNo,
               yearPart: item.yearPart,
               resultType: item.resultType || "MAIN",
-              resultText: workerResult.textPreview || "",
-              textPreview: workerResult.textPreview || "",
+              resultText: status.fullText || status.textPreview,
+              marksSummary: status.marksSummary || "",
+              textPreview: status.textPreview,
               officialUrl: formUrl,
-              telegramSent: Boolean(workerResult.telegramSent),
-              telegramSentAt: workerResult.telegramSent
-                ? FieldValue.serverTimestamp()
-                : null,
-              telegramMessageId: workerResult.telegramMessageId || null,
+              telegramSent: true,
+              telegramSentAt: FieldValue.serverTimestamp(),
+              telegramMessageId: telegramResult?.message_id || outputSnap.data()?.telegramMessageId || null,
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
             },
-            { merge: true }
+            {
+              merge: true
+            }
           );
 
           await doc.ref.set(
@@ -154,7 +169,9 @@ export default async function handler(req, res) {
               resultId,
               updatedAt: FieldValue.serverTimestamp()
             },
-            { merge: true }
+            {
+              merge: true
+            }
           );
 
           if (item.registrationId) {
@@ -163,31 +180,33 @@ export default async function handler(req, res) {
                 status: "result_found",
                 resultFound: true,
                 resultId,
-                telegramSent: Boolean(workerResult.telegramSent),
-                telegramSentAt: workerResult.telegramSent
-                  ? FieldValue.serverTimestamp()
-                  : null,
-                telegramMessageId: workerResult.telegramMessageId || null,
+                telegramSent: true,
+                telegramSentAt: FieldValue.serverTimestamp(),
+                telegramMessageId: telegramResult?.message_id || outputSnap.data()?.telegramMessageId || null,
                 updatedAt: FieldValue.serverTimestamp()
               },
-              { merge: true }
+              {
+                merge: true
+              }
             );
           }
 
           found += 1;
         } else {
-          const finalStatus =
-            nextAttempt >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+          const attempts = (item.attempts || 0) + 1;
+          const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
           await doc.ref.set(
             {
               status: finalStatus,
               resultFound: false,
-              lastError: workerResult.reason || workerResult.status,
-              lastTextPreview: workerResult.textPreview || "",
+              lastError: status.reason,
+              lastTextPreview: status.textPreview,
               updatedAt: FieldValue.serverTimestamp()
             },
-            { merge: true }
+            {
+              merge: true
+            }
           );
 
           if (item.registrationId) {
@@ -196,7 +215,9 @@ export default async function handler(req, res) {
                 status: finalStatus,
                 updatedAt: FieldValue.serverTimestamp()
               },
-              { merge: true }
+              {
+                merge: true
+              }
             );
           }
 
@@ -205,8 +226,8 @@ export default async function handler(req, res) {
       } catch (err) {
         failed += 1;
 
-        const finalStatus =
-          nextAttempt >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+        const attempts = (item.attempts || 0) + 1;
+        const finalStatus = attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
         await doc.ref.set(
           {
@@ -214,7 +235,9 @@ export default async function handler(req, res) {
             lastError: err.message,
             updatedAt: FieldValue.serverTimestamp()
           },
-          { merge: true }
+          {
+            merge: true
+          }
         );
 
         await logEvent("queue", "error", err.message, {
@@ -223,7 +246,7 @@ export default async function handler(req, res) {
       }
     }
 
-    await logEvent("queue", "info", "Queue processing completed by worker", {
+    await logEvent("queue", "info", "Queue processing completed", {
       processed,
       found,
       failed
