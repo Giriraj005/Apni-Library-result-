@@ -1,8 +1,8 @@
-import "./globals.css";
+import "../styles/globals.css";
 
 export const metadata = {
   title: "Apni Library Result Alert",
-  description: "PDUSU result alert and Telegram preview system"
+  description: "PDUSU Result Alert System by Apni Library"
 };
 
 export default function RootLayout({ children }) {
