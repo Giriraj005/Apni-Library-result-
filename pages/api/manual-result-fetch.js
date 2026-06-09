@@ -4,10 +4,54 @@ import {
   getFormUrlForYearPart,
   resultTypeLabel
 } from "../../lib/resultCourseCatalog";
-import {
-  detectResultStatus,
-  submitAspNetResultForm
-} from "../../lib/resultParser";
+
+function getWorkerUrl() {
+  const url = process.env.WORKER_URL;
+
+  if (!url) {
+    throw new Error("WORKER_URL is missing");
+  }
+
+  return url.replace(/\/+$/, "");
+}
+
+function getWorkerSecret() {
+  if (!process.env.WORKER_SECRET) {
+    throw new Error("WORKER_SECRET is missing");
+  }
+
+  return process.env.WORKER_SECRET;
+}
+
+async function fetchResultFromWorker({ rollNo, yearPart, resultType, formUrl }) {
+  const workerUrl = getWorkerUrl();
+  const secret = getWorkerSecret();
+
+  const response = await fetch(`${workerUrl}/fetch-result`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-worker-secret": secret
+    },
+    body: JSON.stringify({
+      secret,
+      rollNo,
+      yearPart,
+      resultType,
+      formUrl
+    })
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || !data) {
+    throw new Error(
+      data?.error || `Worker failed with status ${response.status}`
+    );
+  }
+
+  return data;
+}
 
 export default async function handler(req, res) {
   try {
@@ -34,27 +78,28 @@ export default async function handler(req, res) {
       });
     }
 
-    const out = await submitAspNetResultForm({
-      formUrl,
+    const workerResult = await fetchResultFromWorker({
+      rollNo,
       yearPart,
       resultType,
-      rollNo
+      formUrl
     });
-
-    const status = detectResultStatus(out.html, rollNo);
 
     return res.status(200).json({
       success: true,
+      source: "railway_worker",
       rollNo,
       yearPart,
       resultType,
       formUrl,
-      selected: out.selected,
-      resultStatus: status.status,
-      resultFound: status.resultFound,
-      reason: status.reason,
-      marksSummary: status.marksSummary || status.textPreview || "",
-      textPreview: status.textPreview || ""
+      resultStatus: workerResult.resultStatus,
+      resultFound: workerResult.resultFound,
+      reason: workerResult.reason || "",
+      selected: workerResult.selected || {},
+      marksSummary: workerResult.marksSummary || "",
+      textPreview: workerResult.textPreview || "",
+      durationMs: workerResult.durationMs || null,
+      workerResult
     });
   } catch (err) {
     return safeJsonError(res, err);
