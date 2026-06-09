@@ -1,6 +1,6 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
-import { sendWhatsAppStudentResult } from "../../lib/whatsapp";
+import { sendWhatsAppStudentResultAuto } from "../../lib/whatsapp";
 import { logEvent } from "../../lib/logger";
 
 const BATCH_SIZE = 10;
@@ -106,22 +106,24 @@ export default async function handler(req, res) {
 
       const output = outputSnap.data();
 
-      try {
-        const whatsapp = await sendWhatsAppStudentResult({
-          to: reg.mobile,
-          rollNo: reg.rollNo,
-          yearPart: reg.yearPart,
-          resultSummary: makeWhatsAppShortSummary(
-            output.marksSummary || output.resultText || ""
-          ),
-          officialUrl: output.officialUrl || reg.formUrl || "https://shekhauniexam.in/"
-        });
+      const whatsapp = await sendWhatsAppStudentResultAuto({
+        to: reg.mobile,
+        rollNo: reg.rollNo,
+        yearPart: reg.yearPart,
+        resultSummary: makeWhatsAppShortSummary(
+          output.marksSummary || output.resultText || ""
+        ),
+        officialUrl:
+          output.officialUrl || reg.formUrl || "https://shekhauniexam.in/"
+      });
 
+      if (whatsapp.success) {
         await regDoc.ref.set(
           {
             studentWhatsAppSent: true,
-            studentWhatsApp,
+            studentWhatsApp: whatsapp,
             studentWhatsAppSentAt: FieldValue.serverTimestamp(),
+            studentWhatsAppLastError: "",
             updatedAt: FieldValue.serverTimestamp()
           },
           { merge: true }
@@ -130,8 +132,9 @@ export default async function handler(req, res) {
         await outputSnap.ref.set(
           {
             studentWhatsAppSent: true,
-            studentWhatsApp,
+            studentWhatsApp: whatsapp,
             studentWhatsAppSentAt: FieldValue.serverTimestamp(),
+            studentWhatsAppLastError: "",
             updatedAt: FieldValue.serverTimestamp()
           },
           { merge: true }
@@ -142,15 +145,27 @@ export default async function handler(req, res) {
         results.push({
           registrationId: regDoc.id,
           rollNo: reg.rollNo,
-          success: true
+          success: true,
+          method: whatsapp.method
         });
-      } catch (err) {
+      } else {
         failed += 1;
 
         await regDoc.ref.set(
           {
             studentWhatsAppSent: false,
-            studentWhatsAppLastError: err.message,
+            studentWhatsApp: whatsapp,
+            studentWhatsAppLastError: whatsapp.error || "WhatsApp failed",
+            updatedAt: FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        );
+
+        await outputSnap.ref.set(
+          {
+            studentWhatsAppSent: false,
+            studentWhatsApp: whatsapp,
+            studentWhatsAppLastError: whatsapp.error || "WhatsApp failed",
             updatedAt: FieldValue.serverTimestamp()
           },
           { merge: true }
@@ -160,16 +175,21 @@ export default async function handler(req, res) {
           registrationId: regDoc.id,
           rollNo: reg.rollNo,
           success: false,
-          error: err.message
+          error: whatsapp.error
         });
       }
     }
 
-    await logEvent("student_whatsapp_retry", "info", "Student WhatsApp retry completed", {
-      processed,
-      sent,
-      failed
-    });
+    await logEvent(
+      "student_whatsapp_retry",
+      "info",
+      "Student WhatsApp retry completed",
+      {
+        processed,
+        sent,
+        failed
+      }
+    );
 
     return res.status(200).json({
       success: true,
@@ -181,4 +201,4 @@ export default async function handler(req, res) {
   } catch (err) {
     return safeJsonError(res, err);
   }
-      }
+}
