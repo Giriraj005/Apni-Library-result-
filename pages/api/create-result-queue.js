@@ -5,13 +5,32 @@ export default async function handler(req, res) {
   try {
     requireAdmin(req);
 
-    const courses = req.body?.courses || ["B.A.", "B.SC", "B.COM", "B.B.A.", "B.C.A."];
-    const semesters = req.body?.semesters || ["I", "III", "V"];
-    const resultType = req.body?.resultType || "MAIN";
+    const input = req.method === "POST" ? req.body || {} : req.query || {};
+
+    const courses = Array.isArray(input.courses)
+      ? input.courses
+      : input.courses
+      ? String(input.courses).split(",").map((x) => x.trim()).filter(Boolean)
+      : [];
+
+    const semesters = Array.isArray(input.semesters)
+      ? input.semesters
+      : input.semesters
+      ? String(input.semesters).split(",").map((x) => x.trim()).filter(Boolean)
+      : [];
+
+    const yearParts = Array.isArray(input.yearParts)
+      ? input.yearParts
+      : input.yearParts
+      ? String(input.yearParts).split("|").map((x) => x.trim()).filter(Boolean)
+      : [];
+
+    const resultType = input.resultType || "MAIN";
 
     const result = await createQueueForBatch({
       courses,
       semesters,
+      yearParts,
       resultType
     });
 
