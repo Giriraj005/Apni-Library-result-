@@ -25,12 +25,19 @@ export default async function handler(req, res) {
       ? String(input.yearParts).split("|").map((x) => x.trim()).filter(Boolean)
       : [];
 
+    const formUrls = Array.isArray(input.formUrls)
+      ? input.formUrls
+      : input.formUrls
+      ? String(input.formUrls).split("|").map((x) => x.trim()).filter(Boolean)
+      : [];
+
     const resultType = input.resultType || "MAIN";
 
     const result = await createQueueForBatch({
       courses,
       semesters,
       yearParts,
+      formUrls,
       resultType
     });
 
