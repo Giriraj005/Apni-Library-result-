@@ -34,6 +34,58 @@ function getWorkerSecret() {
   return process.env.WORKER_SECRET;
 }
 
+function isCleanNotFoundStatus({ status = "", reason = "", error = "" }) {
+  const workerStatus = String(status || "").toLowerCase();
+  const message = `${reason || ""} ${error || ""}`.toLowerCase();
+
+  const cleanStatuses = ["not_found", "form_returned"];
+
+  if (cleanStatuses.includes(workerStatus)) {
+    return true;
+  }
+
+  const cleanPhrases = [
+    "form returned",
+    "record not found",
+    "not found",
+    "no record",
+    "invalid roll",
+    "wrong roll",
+    "result not declared",
+    "result not found"
+  ];
+
+  return cleanPhrases.some((phrase) => message.includes(phrase));
+}
+
+function getFinalStatusForWorkerResult({ workerResult, attempts }) {
+  const status = workerResult?.resultStatus || "";
+  const reason = workerResult?.reason || "";
+  const error = workerResult?.error || "";
+
+  if (isCleanNotFoundStatus({ status, reason, error })) {
+    return "not_found";
+  }
+
+  return attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+}
+
+function getFinalStatusForCaughtError({ err, attempts }) {
+  const message = String(err?.message || "");
+
+  if (
+    isCleanNotFoundStatus({
+      status: "",
+      reason: message,
+      error: message
+    })
+  ) {
+    return "not_found";
+  }
+
+  return attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+}
+
 function compactMarksSummary(text = "") {
   const raw = String(text || "").replace(/\s+/g, " ").trim();
 
@@ -358,6 +410,7 @@ export default async function handler(req, res) {
               resultFound: true,
               resultId,
               workerResultStatus: workerResult.resultStatus || "",
+              workerReason: workerResult.reason || "",
               updatedAt: FieldValue.serverTimestamp()
             },
             {
@@ -423,14 +476,19 @@ export default async function handler(req, res) {
                 : ""
           });
         } else {
-          const finalStatus =
-            attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+          const finalStatus = getFinalStatusForWorkerResult({
+            workerResult,
+            attempts
+          });
+
+          const cleanNotFound = finalStatus === "not_found";
 
           await doc.ref.set(
             {
               status: finalStatus,
               resultFound: false,
               workerResultStatus: workerResult.resultStatus || "",
+              workerReason: workerResult.reason || "",
               lastError:
                 workerResult.reason ||
                 workerResult.error ||
@@ -450,6 +508,13 @@ export default async function handler(req, res) {
               .set(
                 {
                   status: finalStatus,
+                  resultFound: false,
+                  workerResultStatus: workerResult.resultStatus || "",
+                  workerReason: workerResult.reason || "",
+                  lastError:
+                    workerResult.reason ||
+                    workerResult.error ||
+                    "Result not found",
                   updatedAt: FieldValue.serverTimestamp()
                 },
                 {
@@ -465,14 +530,18 @@ export default async function handler(req, res) {
             rollNo: item.rollNo,
             yearPart: item.yearPart,
             status: finalStatus,
+            cleanNotFound,
+            workerResultStatus: workerResult.resultStatus || "",
             reason: workerResult.reason || workerResult.error || ""
           });
         }
       } catch (err) {
         failed += 1;
 
-        const finalStatus =
-          attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+        const finalStatus = getFinalStatusForCaughtError({
+          err,
+          attempts
+        });
 
         await doc.ref.set(
           {
@@ -485,8 +554,25 @@ export default async function handler(req, res) {
           }
         );
 
+        if (item.registrationId) {
+          await db
+            .collection("result_registrations")
+            .doc(item.registrationId)
+            .set(
+              {
+                status: finalStatus,
+                lastError: err.message,
+                updatedAt: FieldValue.serverTimestamp()
+              },
+              {
+                merge: true
+              }
+            );
+        }
+
         await logEvent("queue", "error", err.message, {
-          queueId: doc.id
+          queueId: doc.id,
+          finalStatus
         });
 
         results.push({
@@ -517,4 +603,4 @@ export default async function handler(req, res) {
     await logEvent("queue", "error", err.message, {});
     return safeJsonError(res, err);
   }
-                       }
+    }
