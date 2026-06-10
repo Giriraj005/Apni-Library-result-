@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+const WHATSAPP_NUMBER =
+  process.env.NEXT_PUBLIC_WHATSAPP_ACTIVATE_NUMBER || "";
+
 const FALLBACK_GROUPS = [
   {
     id: "pg_nep",
-    label: "PG / Semester / NEP",
+    label: "PG Semester",
     subtitle: "Fallback options",
     options: [
       {
@@ -18,6 +21,17 @@ const FALLBACK_GROUPS = [
     ]
   }
 ];
+
+const GROUP_LABELS = {
+  all: "All Courses",
+  pg_nep: "PG Semester",
+  ug_nep: "UG Semester",
+  pg_annual: "PG Annual",
+  ug_annual: "UG Annual",
+  bed_med: "B.Ed / M.Ed",
+  credit_other: "Other",
+  other: "Other"
+};
 
 function normalizeMobile(value) {
   const digits = String(value || "").replace(/\D/g, "");
@@ -63,6 +77,16 @@ function optionKey(option) {
   return `${optionText(option)}_${option?.formUrl || ""}_${option?.formKey || ""}`;
 }
 
+function userGroupLabel(group) {
+  return GROUP_LABELS[group?.id] || group?.label || "Result Group";
+}
+
+function whatsappActivateLink() {
+  if (!WHATSAPP_NUMBER) return "";
+
+  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("RESULT")}`;
+}
+
 export default function ResultAlertPage() {
   const [groups, setGroups] = useState(FALLBACK_GROUPS);
   const [selectedGroupId, setSelectedGroupId] = useState("pg_nep");
@@ -89,13 +113,16 @@ export default function ResultAlertPage() {
         const data = await res.json();
 
         if (data?.success && Array.isArray(data.groups) && data.groups.length) {
-          setGroups(data.groups);
-          setSource(data.source || "worker");
+          const filtered = data.groups.filter((g) => g.id !== "all");
+          const finalGroups = filtered.length ? filtered : data.groups;
+
+          setGroups(finalGroups);
+          setSource(data.source || "fallback");
 
           const firstNonEmpty =
-            data.groups.find((g) => g.options?.length && g.id !== "all") ||
-            data.groups.find((g) => g.options?.length) ||
-            data.groups[0];
+            finalGroups.find((g) => g.options?.length && g.id === "pg_nep") ||
+            finalGroups.find((g) => g.options?.length) ||
+            finalGroups[0];
 
           if (firstNonEmpty?.id) {
             setSelectedGroupId(firstNonEmpty.id);
@@ -172,7 +199,7 @@ export default function ResultAlertPage() {
     if (!selectedOption) {
       setMessage({
         type: "error",
-        text: "Please select exact course/result option."
+        text: "Please select your exact course/semester."
       });
       return;
     }
@@ -188,7 +215,7 @@ export default function ResultAlertPage() {
     if (!form.consentTelegramGroup || !form.consentWhatsAppResult) {
       setMessage({
         type: "error",
-        text: "Please accept both result alert permissions."
+        text: "Please accept result alert permissions."
       });
       return;
     }
@@ -228,7 +255,7 @@ export default function ResultAlertPage() {
         type: "success",
         text: data.updated
           ? "Your registration details have been updated successfully."
-          : "Registration successful. Result milte hi admin Telegram par preview aur aapke WhatsApp par result summary bheji jayegi.",
+          : "Registration successful. Result milte hi WhatsApp par summary bheji jayegi.",
         data
       });
     } catch (err) {
@@ -240,6 +267,8 @@ export default function ResultAlertPage() {
       setLoading(false);
     }
   }
+
+  const activateLink = whatsappActivateLink();
 
   return (
     <main className="min-h-screen bg-[#f7f3ec] text-slate-900">
@@ -255,35 +284,37 @@ export default function ResultAlertPage() {
               <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950 sm:text-5xl">
                 PDUSU Result Alert
               </h1>
+              <p className="mt-3 max-w-2xl text-sm font-semibold leading-6 text-slate-600">
+                Register your roll number once. When your result is available,
+                you will receive a WhatsApp result summary.
+              </p>
             </div>
 
             <div className="hidden rounded-2xl border border-amber-200 bg-white/80 px-4 py-3 text-right shadow-sm sm:block">
               <p className="text-xs font-semibold text-slate-500">Options</p>
               <p className="text-sm font-bold text-emerald-700">
                 {source === "worker+fallback"
-  ? "Live + Fallback"
-  : source === "worker"
-  ? "Live Dropdowns"
-  : source === "loading"
-  ? "Loading..."
-  : "Fallback"}
+                  ? "Live + Backup"
+                  : source === "worker"
+                  ? "Live"
+                  : source === "loading"
+                  ? "Loading..."
+                  : "Backup"}
               </p>
             </div>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-            <div className="rounded-[2rem] border border-white/80 bg-white/85 p-5 shadow-2xl shadow-amber-900/10 backdrop-blur sm:p-8">
+            <div className="rounded-[2rem] border border-white/80 bg-white/90 p-5 shadow-2xl shadow-amber-900/10 backdrop-blur sm:p-8">
               <div className="mb-6 rounded-3xl bg-slate-950 p-5 text-white shadow-lg">
                 <p className="text-sm font-semibold text-amber-300">
-                  Current Flow
+                  Step 1
                 </p>
                 <h2 className="mt-2 text-2xl font-black">
-                  Exact form auto-selected
+                  Enter student details
                 </h2>
                 <p className="mt-3 text-sm leading-6 text-slate-200">
-                  Course jis official result form me milega, system automatically
-                  wahi form use karega. B.Ed agar PG NEP page me hai, to wahi
-                  saved hoga.
+                  Select exact course/semester from the official result options.
                 </p>
               </div>
 
@@ -320,7 +351,7 @@ export default function ResultAlertPage() {
 
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-slate-700">
-                    Personal WhatsApp Number
+                    WhatsApp Number
                   </span>
                   <div className="flex overflow-hidden rounded-2xl border border-slate-200 bg-white focus-within:border-amber-500 focus-within:ring-4 focus-within:ring-amber-100">
                     <span className="flex items-center border-r border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-600">
@@ -339,10 +370,10 @@ export default function ResultAlertPage() {
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <span className="text-sm font-bold text-slate-700">
-                      Result Group
+                      Select Result Category
                     </span>
                     <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
-                      Live mapping
+                      Exact course required
                     </span>
                   </div>
 
@@ -362,7 +393,7 @@ export default function ResultAlertPage() {
                             : "border-slate-200 bg-white text-slate-700 hover:border-amber-300"
                         }`}
                       >
-                        <span className="block">{group.label}</span>
+                        <span className="block">{userGroupLabel(group)}</span>
                         {group.options?.length ? (
                           <span className="mt-1 block text-[10px] opacity-75">
                             {group.options.length} options
@@ -380,21 +411,21 @@ export default function ResultAlertPage() {
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Example: M.COM ABST, B.ED, HISTORY, BA PART"
+                    placeholder="Type M.COM ABST, B.A SEMESTER I, B.ED, HISTORY..."
                     className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
                   />
                 </label>
 
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-slate-700">
-                    Exact Official Result Option
+                    Select Your Course / Semester
                   </span>
                   <select
                     value={selectedOptionKey}
                     onChange={(e) => setSelectedOptionKey(e.target.value)}
                     className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
                   >
-                    <option value="">Select exact result option</option>
+                    <option value="">Select exact course option</option>
                     {filteredOptions.map((option) => (
                       <option key={optionKey(option)} value={optionKey(option)}>
                         {optionText(option)}
@@ -404,15 +435,12 @@ export default function ResultAlertPage() {
 
                   {selectedOption ? (
                     <div className="mt-2 rounded-2xl bg-emerald-50 px-3 py-3 text-xs font-bold text-emerald-800">
-                      <p>Selected: {optionText(selectedOption)}</p>
-                      <p className="mt-1 break-all text-emerald-700">
-                        Form: {selectedOption.formUrl}
-                      </p>
+                      Selected: {optionText(selectedOption)}
                     </div>
                   ) : (
                     <p className="mt-2 text-xs font-medium text-slate-500">
-                      Exact official dropdown option select karo. System uska
-                      correct form URL save karega.
+                      Search and select the exact course/semester shown in the
+                      official result list.
                     </p>
                   )}
                 </label>
@@ -444,8 +472,8 @@ export default function ResultAlertPage() {
                       className="mt-1 h-4 w-4"
                     />
                     <span className="text-sm font-semibold leading-6 text-slate-700">
-                      I agree that my result preview may be sent to admin
-                      Telegram group/channel for result alert handling.
+                      I agree that Apni Library admin team may receive my result
+                      preview for verification and alert delivery.
                     </span>
                   </label>
 
@@ -459,8 +487,7 @@ export default function ResultAlertPage() {
                       className="mt-1 h-4 w-4"
                     />
                     <span className="text-sm font-semibold leading-6 text-slate-700">
-                      I agree to receive PDUSU result summary on my personal
-                      WhatsApp number.
+                      I agree to receive my PDUSU result summary on WhatsApp.
                     </span>
                   </label>
                 </div>
@@ -475,6 +502,17 @@ export default function ResultAlertPage() {
                   >
                     {message.text}
 
+                    {message.type === "success" && activateLink ? (
+                      <a
+                        href={activateLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 block rounded-2xl bg-emerald-600 px-4 py-3 text-center text-sm font-black uppercase tracking-wide text-white shadow-lg"
+                      >
+                        Activate WhatsApp Alert
+                      </a>
+                    ) : null}
+
                     {message.data?.trackingId ? (
                       <div className="mt-3 rounded-2xl bg-white/70 p-3 text-xs">
                         <p>Tracking ID:</p>
@@ -483,10 +521,6 @@ export default function ResultAlertPage() {
                         </p>
                         <p className="mt-2">Course:</p>
                         <p className="font-black">{message.data.yearPart}</p>
-                        <p className="mt-2">Form URL:</p>
-                        <p className="break-all font-black">
-                          {message.data.formUrl}
-                        </p>
                       </div>
                     ) : null}
                   </div>
@@ -503,39 +537,39 @@ export default function ResultAlertPage() {
             </div>
 
             <aside className="space-y-5">
-              <div className="rounded-[2rem] border border-white/80 bg-white/80 p-6 shadow-xl shadow-amber-900/10 backdrop-blur">
+              <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-xl shadow-amber-900/10">
                 <h3 className="text-xl font-black text-slate-950">
-                  Smart Form Detection
+                  What will happen next?
                 </h3>
 
                 <div className="mt-5 space-y-3">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <p className="font-black text-slate-900">
-                      Live official dropdowns
+                      Automatic checking
                     </p>
                     <p className="mt-1 text-sm leading-6 text-slate-600">
-                      System Railway worker se official result forms ke dropdown
-                      options fetch karta hai.
+                      Your result will be checked from the official university
+                      portal.
                     </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <p className="font-black text-slate-900">
-                      Correct form URL saved
+                      WhatsApp summary
                     </p>
                     <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Course jis official page me milta hai, वही form URL save
-                      hota hai.
+                      If your result is found, you will receive a short result
+                      summary on WhatsApp.
                     </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <p className="font-black text-slate-900">
-                      WhatsApp + Telegram
+                      Official verification
                     </p>
                     <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Result found hone par admin Telegram preview aur student
-                      WhatsApp summary.
+                      Always verify your full marksheet from the official
+                      university website.
                     </p>
                   </div>
                 </div>
@@ -543,15 +577,27 @@ export default function ResultAlertPage() {
 
               <div className="rounded-[2rem] bg-amber-500 p-6 text-white shadow-xl shadow-amber-500/20">
                 <p className="text-sm font-bold uppercase tracking-[0.2em] text-amber-100">
-                  Important
+                  WhatsApp Tip
                 </p>
                 <h3 className="mt-2 text-2xl font-black">
-                  NEP aur Annual alag hain
+                  Activate WhatsApp alerts
                 </h3>
                 <p className="mt-3 text-sm leading-6 text-amber-50">
-                  B.Ed/M.Ed/Annual/NEP results different forms me ho sakte hain.
-                  Isliye exact official option choose karna compulsory hai.
+                  Registration ke baad Apni Library WhatsApp number par
+                  “RESULT” message bhejna better hai. Isse WhatsApp alert
+                  delivery fast ho sakti hai.
                 </p>
+
+                {activateLink ? (
+                  <a
+                    href={activateLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-5 block rounded-2xl bg-white px-5 py-4 text-center text-sm font-black uppercase tracking-wide text-slate-950 shadow-lg"
+                  >
+                    Send RESULT on WhatsApp
+                  </a>
+                ) : null}
               </div>
             </aside>
           </div>
@@ -559,4 +605,4 @@ export default function ResultAlertPage() {
       </section>
     </main>
   );
-            }
+      }
