@@ -2,36 +2,48 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const WHATSAPP_NUMBER =
-  process.env.NEXT_PUBLIC_WHATSAPP_ACTIVATE_NUMBER || "";
-
-const FALLBACK_GROUPS = [
+const DEFAULT_GROUPS = [
   {
     id: "pg_nep",
-    label: "PG Semester",
-    subtitle: "Fallback options",
-    options: [
-      {
-        label: "M.COM ABST SEMESTER I",
-        value: "M.COM ABST SEMESTER I",
-        yearPart: "M.COM ABST SEMESTER I",
-        formKey: "PG_NEP",
-        formUrl: "https://result26.shekhauniexam.in/PG_NEP_RESULT.aspx"
-      }
-    ]
+    label: "PG / Semester / NEP",
+    subtitle: "PG semester, MBA, MCA, LLM and related results",
+    options: []
+  },
+  {
+    id: "ug_nep",
+    label: "UG NEP Semester",
+    subtitle: "BA, BSc, BCom, BBA, BCA semester results",
+    options: []
+  },
+  {
+    id: "pg_annual",
+    label: "PG Annual / Final / Previous",
+    subtitle: "MA, MSc, MCom annual results",
+    options: []
+  },
+  {
+    id: "ug_annual",
+    label: "UG Annual / Old Scheme",
+    subtitle: "BA, BSc, BCom Part results",
+    options: []
+  },
+  {
+    id: "bed_med",
+    label: "B.Ed / M.Ed / Integrated",
+    subtitle: "B.Ed, BA B.Ed, BSc B.Ed, M.Ed results",
+    options: []
+  },
+  {
+    id: "credit_other",
+    label: "Credit / Other",
+    subtitle: "Credit based and other semester results",
+    options: []
   }
 ];
 
-const GROUP_LABELS = {
-  all: "All Courses",
-  pg_nep: "PG Semester",
-  ug_nep: "UG Semester",
-  pg_annual: "PG Annual",
-  ug_annual: "UG Annual",
-  bed_med: "B.Ed / M.Ed",
-  credit_other: "Other",
-  other: "Other"
-};
+function cls(...items) {
+  return items.filter(Boolean).join(" ");
+}
 
 function normalizeMobile(value) {
   const digits = String(value || "").replace(/\D/g, "");
@@ -43,566 +55,420 @@ function normalizeMobile(value) {
   return digits;
 }
 
-function detectSemester(yearPart) {
-  const y = String(yearPart || "").toUpperCase();
-
-  if (y.includes("SEMESTER III")) return "III";
-  if (y.includes("SEMESTER II")) return "II";
-  if (y.includes("SEMESTER IV")) return "IV";
-  if (y.includes("SEMESTER V") && !y.includes("VI")) return "V";
-  if (y.includes("SEMESTER VI")) return "VI";
-  if (y.includes("SEMESTER-I") || y.includes("SEMESTER I")) return "I";
-
-  return "";
-}
-
-function detectCourse(yearPart) {
-  return String(yearPart || "")
-    .toUpperCase()
-    .replace(/SEMESTER[- ]?I\b/g, "")
-    .replace(/SEMESTER[- ]?II\b/g, "")
-    .replace(/SEMESTER[- ]?III\b/g, "")
-    .replace(/SEMESTER[- ]?IV\b/g, "")
-    .replace(/SEMESTER[- ]?V\b/g, "")
-    .replace(/SEMESTER[- ]?VI\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function optionText(option) {
-  return option?.label || option?.yearPart || option?.value || "";
-}
-
-function optionKey(option) {
-  return `${optionText(option)}_${option?.formUrl || ""}_${option?.formKey || ""}`;
-}
-
-function userGroupLabel(group) {
-  return GROUP_LABELS[group?.id] || group?.label || "Result Group";
-}
-
-function whatsappActivateLink() {
-  if (!WHATSAPP_NUMBER) return "";
-
-  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("RESULT")}`;
-}
-
 export default function ResultAlertPage() {
-  const [groups, setGroups] = useState(FALLBACK_GROUPS);
-  const [selectedGroupId, setSelectedGroupId] = useState("pg_nep");
+  const [groups, setGroups] = useState(DEFAULT_GROUPS);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [optionsError, setOptionsError] = useState("");
+
+  const [activeGroup, setActiveGroup] = useState("pg_nep");
   const [search, setSearch] = useState("");
-  const [selectedOptionKey, setSelectedOptionKey] = useState("");
-  const [source, setSource] = useState("loading");
 
-  const [form, setForm] = useState({
-    studentName: "",
-    rollNo: "",
-    mobile: "",
-    resultType: "MAIN",
-    consentTelegramGroup: true,
-    consentWhatsAppResult: true
-  });
+  const [studentName, setStudentName] = useState("");
+  const [rollNo, setRollNo] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [selectedValue, setSelectedValue] = useState("");
+  const [consentAdminPreview, setConsentAdminPreview] = useState(false);
 
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [status, setStatus] = useState(null);
 
   useEffect(() => {
+    let alive = true;
+
     async function loadOptions() {
       try {
-        const res = await fetch("/api/result-course-options");
+        setLoadingOptions(true);
+        setOptionsError("");
+
+        const res = await fetch("/api/result-course-options", {
+          cache: "no-store"
+        });
+
         const data = await res.json();
 
-        if (data?.success && Array.isArray(data.groups) && data.groups.length) {
-          const filtered = data.groups.filter((g) => g.id !== "all");
-          const finalGroups = filtered.length ? filtered : data.groups;
-
-          setGroups(finalGroups);
-          setSource(data.source || "fallback");
-
-          const firstNonEmpty =
-            finalGroups.find((g) => g.options?.length && g.id === "pg_nep") ||
-            finalGroups.find((g) => g.options?.length) ||
-            finalGroups[0];
-
-          if (firstNonEmpty?.id) {
-            setSelectedGroupId(firstNonEmpty.id);
-          }
-        } else {
-          setSource("fallback");
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Course options load nahi ho paye.");
         }
-      } catch {
-        setSource("fallback");
+
+        if (!alive) return;
+
+        const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+        const filtered = loadedGroups.filter((group) => group.id !== "all");
+
+        setGroups(filtered.length ? filtered : DEFAULT_GROUPS);
+
+        const firstWithOptions = filtered.find(
+          (group) => Array.isArray(group.options) && group.options.length
+        );
+
+        if (firstWithOptions) {
+          setActiveGroup(firstWithOptions.id);
+        }
+      } catch (err) {
+        if (!alive) return;
+        setOptionsError(err.message || "Course options load nahi ho paye.");
+        setGroups(DEFAULT_GROUPS);
+      } finally {
+        if (alive) setLoadingOptions(false);
       }
     }
 
     loadOptions();
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const selectedGroup = useMemo(() => {
-    return groups.find((g) => g.id === selectedGroupId) || groups[0];
-  }, [groups, selectedGroupId]);
+  const flatOptions = useMemo(() => {
+    return groups.flatMap((group) =>
+      (group.options || []).map((option) => ({
+        ...option,
+        groupId: group.id,
+        groupLabel: group.label
+      }))
+    );
+  }, [groups]);
 
-  const allCurrentOptions = useMemo(() => {
-    return selectedGroup?.options || [];
-  }, [selectedGroup]);
+  const activeOptions = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    let list = flatOptions.filter((option) => option.groupId === activeGroup);
+
+    if (term) {
+      list = flatOptions.filter((option) => {
+        const hay = `${option.label || ""} ${option.yearPart || ""} ${
+          option.groupLabel || ""
+        }`.toLowerCase();
+
+        return hay.includes(term);
+      });
+    }
+
+    return list;
+  }, [activeGroup, flatOptions, search]);
 
   const selectedOption = useMemo(() => {
-    return allCurrentOptions.find(
-      (option) => optionKey(option) === selectedOptionKey
-    );
-  }, [allCurrentOptions, selectedOptionKey]);
-
-  const filteredOptions = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    if (!q) return allCurrentOptions;
-
-    return allCurrentOptions.filter((option) => {
-      const hay = `${optionText(option)} ${option?.formLabel || ""} ${
-        option?.formKey || ""
-      }`.toLowerCase();
-
-      return hay.includes(q);
+    return flatOptions.find((option) => {
+      const key = `${option.yearPart || option.label}__${option.formUrl || ""}`;
+      return key === selectedValue;
     });
-  }, [allCurrentOptions, search]);
+  }, [flatOptions, selectedValue]);
 
-  function updateField(name, value) {
-    setForm((old) => ({
-      ...old,
-      [name]: value
-    }));
-  }
+  async function handleSubmit(event) {
+    event.preventDefault();
 
-  async function submitRegistration(e) {
-    e.preventDefault();
+    setStatus(null);
 
-    setMessage(null);
+    const cleanRoll = rollNo.replace(/\s+/g, "").trim();
+    const cleanName = studentName.trim();
+    const cleanMobile = normalizeMobile(mobile);
 
-    const mobile = normalizeMobile(form.mobile);
-
-    if (!form.studentName.trim()) {
-      setMessage({
+    if (!cleanName) {
+      setStatus({
         type: "error",
-        text: "Please enter student name."
+        message: "Student name required hai."
       });
       return;
     }
 
-    if (!form.rollNo.trim()) {
-      setMessage({
+    if (!cleanRoll || cleanRoll.length < 3) {
+      setStatus({
         type: "error",
-        text: "Please enter roll number."
+        message: "Valid roll number enter karo."
       });
       return;
     }
 
     if (!selectedOption) {
-      setMessage({
+      setStatus({
         type: "error",
-        text: "Please select your exact course/semester."
+        message: "Course / result option select karo."
       });
       return;
     }
 
-    if (!mobile) {
-      setMessage({
+    if (!consentAdminPreview) {
+      setStatus({
         type: "error",
-        text: "Please enter WhatsApp mobile number."
+        message: "Verification consent tick karna required hai."
       });
       return;
     }
-
-    if (!form.consentTelegramGroup || !form.consentWhatsAppResult) {
-      setMessage({
-        type: "error",
-        text: "Please accept result alert permissions."
-      });
-      return;
-    }
-
-    const yearPart = optionText(selectedOption);
-
-    setLoading(true);
 
     try {
+      setSubmitting(true);
+
       const res = await fetch("/api/register-result-alert", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          studentName: form.studentName,
-          rollNo: form.rollNo,
-          mobile,
-          yearPart,
-          course: detectCourse(yearPart),
-          semester: detectSemester(yearPart),
-          resultType: form.resultType,
+          studentName: cleanName,
+          rollNo: cleanRoll,
+          mobile: cleanMobile,
+          yearPart: selectedOption.yearPart || selectedOption.label,
+          course: selectedOption.yearPart || selectedOption.label,
+          resultType: "MAIN",
           formUrl: selectedOption.formUrl,
           formKey: selectedOption.formKey,
-          consentTelegramGroup: form.consentTelegramGroup,
-          consentWhatsAppResult: form.consentWhatsAppResult
+          consentAdminPreview: true
         })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || !data.success) {
+      if (!res.ok || data.success === false) {
         throw new Error(data.error || "Registration failed");
       }
 
-      setMessage({
+      setStatus({
         type: "success",
-        text: data.updated
-          ? "Your registration details have been updated successfully."
-          : "Registration successful. Result milte hi WhatsApp par summary bheji jayegi.",
-        data
+        message:
+          data.message ||
+          "Registration successful. Result status page par update dikhega.",
+        registrationId: data.registrationId,
+        mobileVerifiedForWhatsApp: data.mobileVerifiedForWhatsApp
       });
+
+      setStudentName("");
+      setRollNo("");
+      setMobile("");
+      setSelectedValue("");
+      setConsentAdminPreview(false);
     } catch (err) {
-      setMessage({
+      setStatus({
         type: "error",
-        text: err.message || "Registration failed"
+        message: err.message || "Registration failed"
       });
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }
 
-  const activateLink = whatsappActivateLink();
-
   return (
-    <main className="min-h-screen bg-[#f7f3ec] text-slate-900">
-      <section className="relative overflow-hidden px-4 py-8 sm:px-6 lg:px-8">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.22),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(15,23,42,0.10),transparent_35%)]" />
-
-        <div className="relative mx-auto max-w-6xl">
-          <div className="mb-6 flex items-center justify-between gap-3">
+    <main className="min-h-screen bg-[#f6f3ee] text-slate-900">
+      <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="rounded-[2rem] border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+          <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr]">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.28em] text-amber-700">
-                Apni Library
-              </p>
-              <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950 sm:text-5xl">
+              <div className="mb-4 inline-flex rounded-full bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700">
                 PDUSU Result Alert
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm font-semibold leading-6 text-slate-600">
-                Register your roll number once. When your result is available,
-                you will receive a WhatsApp result summary.
-              </p>
-            </div>
-
-            <div className="hidden rounded-2xl border border-amber-200 bg-white/80 px-4 py-3 text-right shadow-sm sm:block">
-              <p className="text-xs font-semibold text-slate-500">Options</p>
-              <p className="text-sm font-bold text-emerald-700">
-                {source === "worker+fallback"
-                  ? "Live + Backup"
-                  : source === "worker"
-                  ? "Live"
-                  : source === "loading"
-                  ? "Loading..."
-                  : "Backup"}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-            <div className="rounded-[2rem] border border-white/80 bg-white/90 p-5 shadow-2xl shadow-amber-900/10 backdrop-blur sm:p-8">
-              <div className="mb-6 rounded-3xl bg-slate-950 p-5 text-white shadow-lg">
-                <p className="text-sm font-semibold text-amber-300">
-                  Step 1
-                </p>
-                <h2 className="mt-2 text-2xl font-black">
-                  Enter student details
-                </h2>
-                <p className="mt-3 text-sm leading-6 text-slate-200">
-                  Select exact course/semester from the official result options.
-                </p>
               </div>
 
-              <form onSubmit={submitRegistration} className="space-y-5">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-bold text-slate-700">
-                      Student Name
-                    </span>
-                    <input
-                      value={form.studentName}
-                      onChange={(e) =>
-                        updateField("studentName", e.target.value)
-                      }
-                      placeholder="Example: Giriraj Pareek"
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
-                    />
-                  </label>
+              <h1 className="text-3xl font-black tracking-tight text-slate-950 sm:text-5xl">
+                Result alert ke liye roll number register karo
+              </h1>
 
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-bold text-slate-700">
-                      Roll Number
-                    </span>
-                    <input
-                      value={form.rollNo}
-                      onChange={(e) =>
-                        updateField("rollNo", e.target.value.toUpperCase())
-                      }
-                      placeholder="Example: 26331464"
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
-                    />
-                  </label>
+              <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
+                Result available hote hi system official portal se result check
+                karega. Admin team ko verification ke liye preview milega, aur
+                aap status page par apna result status check kar sakenge.
+              </p>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-2xl font-black text-slate-950">1</div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Course aur roll number register
+                  </p>
                 </div>
-
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-700">
-                    WhatsApp Number
-                  </span>
-                  <div className="flex overflow-hidden rounded-2xl border border-slate-200 bg-white focus-within:border-amber-500 focus-within:ring-4 focus-within:ring-amber-100">
-                    <span className="flex items-center border-r border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-600">
-                      +91
-                    </span>
-                    <input
-                      value={form.mobile}
-                      onChange={(e) => updateField("mobile", e.target.value)}
-                      placeholder="10 digit WhatsApp number"
-                      inputMode="numeric"
-                      className="w-full px-4 py-3 text-sm font-semibold outline-none"
-                    />
-                  </div>
-                </label>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-sm font-bold text-slate-700">
-                      Select Result Category
-                    </span>
-                    <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
-                      Exact course required
-                    </span>
-                  </div>
-
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {groups.map((group) => (
-                      <button
-                        type="button"
-                        key={group.id}
-                        onClick={() => {
-                          setSelectedGroupId(group.id);
-                          setSearch("");
-                          setSelectedOptionKey("");
-                        }}
-                        className={`rounded-2xl border px-3 py-3 text-left text-xs font-black transition ${
-                          selectedGroupId === group.id
-                            ? "border-amber-500 bg-amber-500 text-white shadow-lg shadow-amber-500/25"
-                            : "border-slate-200 bg-white text-slate-700 hover:border-amber-300"
-                        }`}
-                      >
-                        <span className="block">{userGroupLabel(group)}</span>
-                        {group.options?.length ? (
-                          <span className="mt-1 block text-[10px] opacity-75">
-                            {group.options.length} options
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-2xl font-black text-slate-950">2</div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    System official result portal check karega
+                  </p>
                 </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-2xl font-black text-slate-950">3</div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Status page par result update dikhega
+                  </p>
+                </div>
+              </div>
 
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-700">
-                    Search Course
+              <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+                WhatsApp result/update sirf verified alert list ke numbers par
+                jayega. Baaki students status page se result status check kar
+                sakte hain.
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+                Duplicate rule: same roll number + same course + same result
+                type + same result year ek baar hi register hoga.
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleSubmit}
+              className="rounded-[1.5rem] border border-slate-100 bg-slate-50 p-5 sm:p-6"
+            >
+              <div className="grid gap-4">
+                <label className="grid gap-2">
+                  <span className="text-sm font-bold text-slate-800">
+                    Student Name
                   </span>
                   <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Type M.COM ABST, B.A SEMESTER I, B.ED, HISTORY..."
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
+                    value={studentName}
+                    onChange={(event) => setStudentName(event.target.value)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-orange-400"
+                    placeholder="Student name"
                   />
                 </label>
 
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-700">
-                    Select Your Course / Semester
+                <label className="grid gap-2">
+                  <span className="text-sm font-bold text-slate-800">
+                    Roll Number
                   </span>
-                  <select
-                    value={selectedOptionKey}
-                    onChange={(e) => setSelectedOptionKey(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
-                  >
-                    <option value="">Select exact course option</option>
-                    {filteredOptions.map((option) => (
-                      <option key={optionKey(option)} value={optionKey(option)}>
-                        {optionText(option)}
-                      </option>
+                  <input
+                    value={rollNo}
+                    onChange={(event) => setRollNo(event.target.value)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-orange-400"
+                    placeholder="Example: 26331464"
+                  />
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="text-sm font-bold text-slate-800">
+                    WhatsApp / Mobile Number
+                  </span>
+                  <input
+                    value={mobile}
+                    onChange={(event) => setMobile(event.target.value)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-orange-400"
+                    placeholder="Example: 9358282738"
+                  />
+                  <span className="text-xs text-slate-500">
+                    WhatsApp result/update sirf verified alert list numbers par
+                    jayega.
+                  </span>
+                </label>
+
+                <div className="grid gap-2">
+                  <span className="text-sm font-bold text-slate-800">
+                    Course / Result Option
+                  </span>
+
+                  <div className="flex flex-wrap gap-2">
+                    {groups.map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveGroup(group.id);
+                          setSearch("");
+                        }}
+                        className={cls(
+                          "rounded-full px-3 py-2 text-xs font-bold",
+                          activeGroup === group.id
+                            ? "bg-slate-950 text-white"
+                            : "bg-white text-slate-700 ring-1 ring-slate-200"
+                        )}
+                      >
+                        {group.label}
+                      </button>
                     ))}
+                  </div>
+
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    className="mt-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-orange-400"
+                    placeholder="Search: M.COM ABST, B.A, B.SC, B.ED..."
+                  />
+
+                  <select
+                    value={selectedValue}
+                    onChange={(event) => setSelectedValue(event.target.value)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-orange-400"
+                    disabled={loadingOptions}
+                  >
+                    <option value="">
+                      {loadingOptions
+                        ? "Loading options..."
+                        : "Select course / result option"}
+                    </option>
+
+                    {activeOptions.map((option, index) => {
+                      const key = `${option.yearPart || option.label}__${
+                        option.formUrl || ""
+                      }`;
+
+                      return (
+                        <option key={`${key}_${index}`} value={key}>
+                          {option.label || option.yearPart}
+                        </option>
+                      );
+                    })}
                   </select>
+
+                  {optionsError ? (
+                    <p className="text-xs font-semibold text-red-600">
+                      {optionsError}
+                    </p>
+                  ) : null}
 
                   {selectedOption ? (
-                    <div className="mt-2 rounded-2xl bg-emerald-50 px-3 py-3 text-xs font-bold text-emerald-800">
-                      Selected: {optionText(selectedOption)}
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3 text-xs leading-5 text-emerald-800">
+                      Selected:{" "}
+                      <b>{selectedOption.yearPart || selectedOption.label}</b>
                     </div>
-                  ) : (
-                    <p className="mt-2 text-xs font-medium text-slate-500">
-                      Search and select the exact course/semester shown in the
-                      official result list.
-                    </p>
-                  )}
-                </label>
-
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-700">
-                    Result Type
-                  </span>
-                  <select
-                    value={form.resultType}
-                    onChange={(e) => updateField("resultType", e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-100"
-                  >
-                    <option value="MAIN">MAIN</option>
-                    <option value="REVAL">REVAL</option>
-                    <option value="SUPPLEMENTARY">SUPPLEMENTARY</option>
-                    <option value="SPECIAL">SPECIAL</option>
-                  </select>
-                </label>
-
-                <div className="space-y-3 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <label className="flex gap-3">
-                    <input
-                      type="checkbox"
-                      checked={form.consentTelegramGroup}
-                      onChange={(e) =>
-                        updateField("consentTelegramGroup", e.target.checked)
-                      }
-                      className="mt-1 h-4 w-4"
-                    />
-                    <span className="text-sm font-semibold leading-6 text-slate-700">
-                      I agree that Apni Library admin team may receive my result
-                      preview for verification and alert delivery.
-                    </span>
-                  </label>
-
-                  <label className="flex gap-3">
-                    <input
-                      type="checkbox"
-                      checked={form.consentWhatsAppResult}
-                      onChange={(e) =>
-                        updateField("consentWhatsAppResult", e.target.checked)
-                      }
-                      className="mt-1 h-4 w-4"
-                    />
-                    <span className="text-sm font-semibold leading-6 text-slate-700">
-                      I agree to receive my PDUSU result summary on WhatsApp.
-                    </span>
-                  </label>
+                  ) : null}
                 </div>
 
-                {message ? (
+                <label className="flex gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={consentAdminPreview}
+                    onChange={(event) =>
+                      setConsentAdminPreview(event.target.checked)
+                    }
+                    className="mt-1"
+                  />
+                  <span>
+                    Main agree karta/karti hoon ki result available hone par
+                    Apni Library admin team verification ke liye result preview
+                    receive kar sakti hai.
+                  </span>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={submitting || loadingOptions}
+                  className="rounded-2xl bg-orange-500 px-5 py-4 text-sm font-black text-white shadow-sm transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? "Registering..." : "Register Result Alert"}
+                </button>
+
+                {status ? (
                   <div
-                    className={`rounded-3xl border p-4 text-sm font-bold ${
-                      message.type === "success"
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                        : "border-red-200 bg-red-50 text-red-700"
-                    }`}
+                    className={cls(
+                      "rounded-2xl p-4 text-sm font-semibold leading-6",
+                      status.type === "success"
+                        ? "border border-emerald-100 bg-emerald-50 text-emerald-800"
+                        : "border border-red-100 bg-red-50 text-red-700"
+                    )}
                   >
-                    {message.text}
+                    {status.message}
 
-                    {message.type === "success" && activateLink ? (
-                      <a
-                        href={activateLink}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-4 block rounded-2xl bg-emerald-600 px-4 py-3 text-center text-sm font-black uppercase tracking-wide text-white shadow-lg"
-                      >
-                        Activate WhatsApp Alert
-                      </a>
-                    ) : null}
-
-                    {message.data?.trackingId ? (
-                      <div className="mt-3 rounded-2xl bg-white/70 p-3 text-xs">
-                        <p>Tracking ID:</p>
-                        <p className="break-all font-black">
-                          {message.data.trackingId}
-                        </p>
-                        <p className="mt-2">Course:</p>
-                        <p className="font-black">{message.data.yearPart}</p>
+                    {status.type === "success" ? (
+                      <div className="mt-3">
+                        <a
+                          href="/result-status"
+                          className="inline-flex rounded-full bg-white px-4 py-2 text-xs font-black text-slate-900 ring-1 ring-slate-200"
+                        >
+                          Check Status
+                        </a>
                       </div>
                     ) : null}
                   </div>
                 ) : null}
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full rounded-2xl bg-slate-950 px-5 py-4 text-sm font-black uppercase tracking-wide text-white shadow-xl shadow-slate-900/20 transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {loading ? "Registering..." : "Register for Result Alert"}
-                </button>
-              </form>
-            </div>
-
-            <aside className="space-y-5">
-              <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-xl shadow-amber-900/10">
-                <h3 className="text-xl font-black text-slate-950">
-                  What will happen next?
-                </h3>
-
-                <div className="mt-5 space-y-3">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <p className="font-black text-slate-900">
-                      Automatic checking
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Your result will be checked from the official university
-                      portal.
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <p className="font-black text-slate-900">
-                      WhatsApp summary
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      If your result is found, you will receive a short result
-                      summary on WhatsApp.
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <p className="font-black text-slate-900">
-                      Official verification
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Always verify your full marksheet from the official
-                      university website.
-                    </p>
-                  </div>
-                </div>
               </div>
-
-              <div className="rounded-[2rem] bg-amber-500 p-6 text-white shadow-xl shadow-amber-500/20">
-                <p className="text-sm font-bold uppercase tracking-[0.2em] text-amber-100">
-                  WhatsApp Tip
-                </p>
-                <h3 className="mt-2 text-2xl font-black">
-                  Activate WhatsApp alerts
-                </h3>
-                <p className="mt-3 text-sm leading-6 text-amber-50">
-                  Registration ke baad Apni Library WhatsApp number par
-                  “RESULT” message bhejna better hai. Isse WhatsApp alert
-                  delivery fast ho sakti hai.
-                </p>
-
-                {activateLink ? (
-                  <a
-                    href={activateLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-5 block rounded-2xl bg-white px-5 py-4 text-center text-sm font-black uppercase tracking-wide text-slate-950 shadow-lg"
-                  >
-                    Send RESULT on WhatsApp
-                  </a>
-                ) : null}
-              </div>
-            </aside>
+            </form>
           </div>
         </div>
       </section>
     </main>
   );
-      }
+}
