@@ -5,38 +5,38 @@ import { useEffect, useMemo, useState } from "react";
 const DEFAULT_GROUPS = [
   {
     id: "pg_nep",
-    label: "PG Semester",
-    subtitle: "PG NEP, MBA, MCA, LLM, M.Com, M.Sc, M.A results",
+    label: "PG / Semester / NEP",
+    subtitle: "Select the result category that matches your course.",
     options: []
   },
   {
     id: "ug_nep",
-    label: "UG Semester",
-    subtitle: "BA, BSc, BCom, BBA, BCA semester results",
+    label: "UG NEP Semester",
+    subtitle: "Select the result category that matches your course.",
     options: []
   },
   {
     id: "pg_annual",
-    label: "PG Annual",
-    subtitle: "MA, MSc, MCom Previous / Final results",
+    label: "PG Annual / Final / Previous",
+    subtitle: "Select the result category that matches your course.",
     options: []
   },
   {
     id: "ug_annual",
-    label: "UG Annual",
-    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
+    label: "UG Annual / Old Scheme",
+    subtitle: "Select the result category that matches your course.",
     options: []
   },
   {
     id: "bed_med",
-    label: "B.Ed / M.Ed",
-    subtitle: "B.Ed, M.Ed, BA B.Ed, BSc B.Ed results",
+    label: "B.Ed / M.Ed / Integrated",
+    subtitle: "Select the result category that matches your course.",
     options: []
   },
   {
     id: "credit_other",
-    label: "Other",
-    subtitle: "Credit based and other result forms",
+    label: "Credit / Other Results",
+    subtitle: "Select the result category that matches your course.",
     options: []
   }
 ];
@@ -140,6 +140,18 @@ function Icon({ name, className = "" }) {
         <path d="M22 10 12 5 2 10l10 5 10-5Z" />
         <path d="M6 12v5c3 2 9 2 12 0v-5" />
       </svg>
+    ),
+    bolt: (
+      <svg {...common}>
+        <path d="M13 2 3 14h8l-1 8 11-14h-8l0-6Z" />
+      </svg>
+    ),
+    sparkles: (
+      <svg {...common}>
+        <path d="M12 3l1.6 4.6L18 9.2l-4.4 1.6L12 15l-1.6-4.2L6 9.2l4.4-1.6L12 3Z" />
+        <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />
+        <path d="M5 14l.7 2L8 17l-2.3.9L5 20l-.7-2.1L2 17l2.3-1L5 14Z" />
+      </svg>
     )
   };
 
@@ -148,23 +160,31 @@ function Icon({ name, className = "" }) {
 
 function FieldIcon({ name }) {
   return (
-    <span className="pointer-events-none absolute left-4 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-2xl bg-slate-50 text-slate-500 ring-1 ring-slate-100">
-      <Icon name={name} className="h-4.5 w-4.5" />
+    <span className="pointer-events-none absolute left-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-2xl bg-slate-50 text-slate-500 ring-1 ring-slate-100">
+      <Icon name={name} className="h-5 w-5" />
     </span>
   );
 }
 
-function StatCard({ number, icon, title, text }) {
+function StepCard({ number, icon, title, subtitle, showConnector }) {
   return (
-    <div className="relative rounded-[1.35rem] border border-orange-100 bg-white/90 p-4 text-center shadow-[0_14px_35px_rgba(15,23,42,0.055)] backdrop-blur">
-      <div className="mx-auto -mt-1 grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-xs font-black text-white shadow-[0_12px_24px_rgba(249,115,22,0.28)]">
+    <div className="relative rounded-[1.45rem] border border-orange-100 bg-white/95 p-5 text-center shadow-[0_18px_42px_rgba(15,23,42,0.06)]">
+      {showConnector ? (
+        <div className="absolute -right-5 top-1/2 hidden h-px w-10 border-t border-dashed border-orange-200 md:block" />
+      ) : null}
+
+      <div className="mx-auto -mt-1 grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-sm font-black text-white shadow-[0_12px_26px_rgba(249,115,22,0.32)]">
         {number}
       </div>
-      <div className="mx-auto mt-4 grid h-12 w-12 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
-        <Icon name={icon} className="h-5 w-5" />
+
+      <div className="mx-auto mt-5 grid h-14 w-14 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
+        <Icon name={icon} className="h-7 w-7" />
       </div>
-      <h3 className="mt-3 text-base font-black text-[#07112f]">{title}</h3>
-      <p className="mt-1 text-xs font-medium leading-5 text-slate-500">{text}</p>
+
+      <h3 className="mt-4 text-lg font-black text-[#07122f]">{title}</h3>
+      <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
+        {subtitle}
+      </p>
     </div>
   );
 }
@@ -231,7 +251,7 @@ export default function ResultAlertPage() {
 
         setOptionsError(
           err.name === "AbortError"
-            ? "Course list slow hai. Page refresh karke dobara try karo."
+            ? "Course list is taking longer than expected. Please refresh and try again."
             : err.message || "Course options load nahi ho paye."
         );
 
@@ -281,10 +301,6 @@ export default function ResultAlertPage() {
     });
   }, [flatOptions, selectedValue]);
 
-  const selectedGroup = useMemo(() => {
-    return groups.find((group) => group.id === activeGroup);
-  }, [groups, activeGroup]);
-
   async function handleSubmit(event) {
     event.preventDefault();
 
@@ -315,7 +331,7 @@ export default function ResultAlertPage() {
     if (!consentAdminPreview) {
       setStatus({
         type: "error",
-        message: "Verification consent tick karna required hai."
+        message: "Consent tick karna required hai."
       });
       return;
     }
@@ -370,448 +386,441 @@ export default function ResultAlertPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#fff7ed] px-3 py-3 text-slate-950 sm:px-5 sm:py-5 lg:px-7 lg:py-7">
+    <main className="min-h-screen overflow-hidden bg-[#f7f3ec] px-3 py-4 text-slate-950 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute -left-24 -top-28 h-80 w-80 rounded-full bg-orange-200/40 blur-3xl sm:h-96 sm:w-96" />
-        <div className="absolute -right-28 top-10 h-96 w-96 rounded-full bg-blue-200/30 blur-3xl" />
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-amber-200/30 blur-3xl" />
+        <div className="absolute -right-28 top-10 h-96 w-96 rounded-full bg-blue-200/25 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-amber-200/25 blur-3xl" />
       </div>
 
-      <section className="mx-auto max-w-[1380px]">
-        <div className="rounded-[1.6rem] border border-white/80 bg-white/90 p-3 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5 lg:p-7">
-          <div className="grid gap-5 lg:grid-cols-[0.92fr_1.08fr] xl:grid-cols-[0.95fr_1.05fr]">
-            <section className="order-2 rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf3] to-white p-5 shadow-sm ring-1 ring-orange-100/60 sm:p-7 lg:order-1 lg:p-8">
-              <div className="inline-flex items-center gap-3 rounded-full border border-orange-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-orange-600 shadow-[0_10px_25px_rgba(249,115,22,0.12)]">
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-orange-50 text-orange-600">
-                  <Icon name="bell" className="h-4 w-4" />
-                </span>
-                Result Alert
-              </div>
+      <section className="mx-auto max-w-[1200px]">
+        <div className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/92 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5 lg:p-7">
+          <div className="grid gap-6 lg:grid-cols-[52fr_48fr] lg:items-stretch">
+            <section className="relative rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8">
+              <div className="pointer-events-none absolute right-6 top-8 hidden h-28 w-28 rounded-full bg-orange-100/70 blur-3xl md:block" />
+              <div className="pointer-events-none absolute bottom-12 left-8 hidden h-32 w-32 rounded-full bg-amber-100/70 blur-3xl md:block" />
 
-              <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_160px]">
-                <div>
-                  <h1 className="max-w-2xl text-[2.55rem] font-black leading-[1.08] tracking-[-0.055em] text-[#07112f] sm:text-5xl lg:text-[3.65rem] xl:text-[4.25rem]">
-                    Result Alert ke liye{" "}
-                    <span className="whitespace-nowrap">Roll Number</span>{" "}
-                    <span className="relative inline-block text-orange-600">
-                      Register Karo
-                      <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
-                    </span>
-                  </h1>
-
-                  <p className="mt-5 max-w-xl text-sm font-medium leading-7 text-slate-600 sm:text-base sm:leading-8">
-                    Register once to track your result status with ease. System
-                    official portal se result check karega aur status page par
-                    update show hoga.
-                  </p>
+              <div className="relative">
+                <div className="inline-flex items-center gap-3 rounded-full border border-orange-100 bg-white px-5 py-3 text-xs font-black uppercase tracking-wide text-orange-600 shadow-[0_10px_25px_rgba(249,115,22,0.12)]">
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-orange-50 text-orange-600">
+                    <Icon name="bell" className="h-4 w-4" />
+                  </span>
+                  RESULT ALERT
                 </div>
 
-                <div className="relative hidden xl:block">
-                  <div className="absolute right-0 top-0 rotate-6 rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_22px_45px_rgba(15,23,42,0.10)]">
-                    <div className="mb-3 h-3 w-20 rounded-full bg-orange-100" />
-                    <div className="mb-4 h-3 w-28 rounded-full bg-slate-100" />
-                    <div className="grid h-28 w-28 place-items-center rounded-[1.4rem] bg-gradient-to-br from-orange-100 to-amber-50 text-orange-600">
-                      <Icon name="check" className="h-12 w-12" />
-                    </div>
-                  </div>
-                  <div className="absolute -left-1 top-28 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-red-500 text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)]">
-                    <Icon name="bell" className="h-8 w-8" />
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-7 grid gap-4 sm:grid-cols-3">
-                <StatCard
-                  number="01"
-                  icon="user"
-                  title="Register"
-                  text="Enter your details"
-                />
-                <StatCard
-                  number="02"
-                  icon="refresh"
-                  title="Auto Check"
-                  text="Official portal tracking"
-                />
-                <StatCard
-                  number="03"
-                  icon="shield"
-                  title="Track Status"
-                  text="Check latest status"
-                />
-              </div>
-
-              <div className="mt-5 rounded-[1.45rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-900">
-                WhatsApp result/update sirf verified alert-list numbers par
-                jayega. Baaki students status page se result status check kar
-                sakte hain.
-              </div>
-
-              <div className="mt-4 rounded-[1.45rem] border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-600">
-                Same roll number + same course + same result type + same result
-                year ek baar hi register hoga.
-              </div>
-
-              <div className="mt-5 hidden overflow-hidden rounded-[1.6rem] border border-orange-100 bg-gradient-to-br from-white via-[#fff7ed] to-[#ffe6cc] p-5 shadow-[0_18px_45px_rgba(249,115,22,0.10)] xl:block">
-                <div className="grid gap-4 md:grid-cols-[1fr_210px]">
+                <div className="mt-7 grid gap-6 xl:grid-cols-[1fr_150px]">
                   <div>
-                    <h2 className="text-2xl font-black leading-tight tracking-tight text-[#07112f]">
-                      Smart Result Tracking,{" "}
-                      <span className="text-orange-600">Stay Updated.</span>
-                    </h2>
-                    <p className="mt-2 max-w-md text-sm font-medium leading-6 text-slate-600">
-                      Secure registration, verified WhatsApp delivery, and status
-                      page tracking for every student.
+                    <h1 className="max-w-2xl text-[2.55rem] font-black leading-[1.08] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[3.55rem] xl:text-[4rem]">
+                      Result alert ke liye roll number{" "}
+                      <span className="relative inline-block text-orange-600">
+                        register karo
+                        <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
+                      </span>
+                    </h1>
+
+                    <p className="mt-6 max-w-xl text-base font-medium leading-8 text-slate-600 sm:text-lg">
+                      Register once to receive timely result updates and track
+                      your status with ease. Stay informed with a simple and
+                      secure alert experience.
                     </p>
-
-                    <div className="mt-5 flex flex-wrap gap-3">
-                      <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
-                        <div className="flex items-center gap-3">
-                          <span className="grid h-10 w-10 place-items-center rounded-xl bg-yellow-100 text-yellow-600">
-                            <Icon name="refresh" className="h-5 w-5" />
-                          </span>
-                          <div>
-                            <div className="text-sm font-black text-slate-900">
-                              Auto Checks
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              Cron powered
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
-                        <div className="flex items-center gap-3">
-                          <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-100 text-indigo-600">
-                            <Icon name="lock" className="h-5 w-5" />
-                          </span>
-                          <div>
-                            <div className="text-sm font-black text-slate-900">
-                              Secure Status
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              Private access
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
                   </div>
 
-                  <div className="relative">
-                    <div className="absolute right-4 top-0 rotate-6 rounded-[1.8rem] bg-gradient-to-br from-[#071a43] to-[#123c86] p-3 shadow-[0_25px_45px_rgba(15,23,42,0.26)]">
-                      <div className="h-56 w-32 rounded-[1.35rem] border border-white/20 bg-[#071a43] p-3">
-                        <div className="mx-auto mb-5 h-1.5 w-9 rounded-full bg-white/35" />
-                        <div className="grid place-items-center pt-3 text-center">
-                          <div className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-orange-400 text-white shadow-lg">
-                            <Icon name="bell" className="h-7 w-7" />
-                          </div>
-                          <div className="text-base font-black leading-tight text-white">
-                            Result Update
-                            <br />
-                            Available
-                          </div>
-                          <div className="mt-4 rounded-full bg-white px-3 py-2 text-[11px] font-black text-orange-600">
-                            View Status
-                          </div>
-                        </div>
+                  <div className="relative hidden xl:block">
+                    <div className="absolute right-0 top-0 rotate-6 rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_22px_45px_rgba(15,23,42,0.10)]">
+                      <div className="mb-3 h-3 w-20 rounded-full bg-orange-100" />
+                      <div className="mb-4 h-3 w-28 rounded-full bg-slate-100" />
+                      <div className="grid h-28 w-28 place-items-center rounded-[1.4rem] bg-gradient-to-br from-orange-100 to-amber-50 text-orange-600">
+                        <Icon name="check" className="h-12 w-12" />
                       </div>
                     </div>
-                    <div className="absolute bottom-3 left-0 grid h-16 w-16 place-items-center rounded-3xl bg-[#10234c] text-white shadow-xl">
-                      <Icon name="check" className="h-8 w-8" />
+
+                    <div className="absolute -left-2 top-28 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-red-500 text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)]">
+                      <Icon name="bell" className="h-8 w-8" />
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="mt-5 flex flex-wrap items-center justify-center gap-3 text-xs font-black text-slate-600 sm:text-sm">
-                <span className="flex items-center gap-2">
-                  <Icon name="shield" className="h-4 w-4 text-indigo-700" />
-                  Secure
-                </span>
-                <span className="text-slate-300">•</span>
-                <span>Private</span>
-                <span className="text-slate-300">•</span>
-                <span>Verified Alerts Only</span>
+                <div className="mt-8 grid gap-4 md:grid-cols-3">
+                  <StepCard
+                    number="01"
+                    icon="user"
+                    title="Register"
+                    subtitle="Enter your details"
+                    showConnector
+                  />
+                  <StepCard
+                    number="02"
+                    icon="bell"
+                    title="Get Alerts"
+                    subtitle="Receive timely updates"
+                    showConnector
+                  />
+                  <StepCard
+                    number="03"
+                    icon="shield"
+                    title="Track Status"
+                    subtitle="Check latest status"
+                  />
+                </div>
+
+                <div className="mt-6 overflow-hidden rounded-[1.65rem] border border-orange-100 bg-gradient-to-br from-white via-[#fff7ed] to-[#ffe4c7] p-5 shadow-[0_18px_45px_rgba(249,115,22,0.10)] sm:p-6">
+                  <div className="grid gap-5 md:grid-cols-[1fr_210px] md:items-center">
+                    <div>
+                      <h2 className="text-2xl font-black leading-tight tracking-tight text-[#07122f] sm:text-3xl">
+                        Smart Result Alerts,
+                        <br />
+                        <span className="text-orange-600">Stay Informed.</span>
+                      </h2>
+
+                      <p className="mt-3 max-w-md text-sm font-medium leading-6 text-slate-600 sm:text-base">
+                        Timely updates. Complete peace of mind.
+                      </p>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-orange-100/60">
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-10 w-10 place-items-center rounded-xl bg-yellow-100 text-yellow-600">
+                              <Icon name="bolt" className="h-5 w-5" />
+                            </span>
+                            <div>
+                              <div className="text-sm font-black text-slate-900">
+                                Quick Updates
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                Timely notifications
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-orange-100/60">
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-10 w-10 place-items-center rounded-xl bg-purple-100 text-purple-600">
+                              <Icon name="lock" className="h-5 w-5" />
+                            </span>
+                            <div>
+                              <div className="text-sm font-black text-slate-900">
+                                Secure Access
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                Your data is protected
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="relative mx-auto hidden h-64 w-52 md:block">
+                      <div className="absolute right-6 top-0 rotate-6 rounded-[1.8rem] bg-gradient-to-br from-[#071a43] to-[#123c86] p-3 shadow-[0_25px_45px_rgba(15,23,42,0.26)]">
+                        <div className="h-56 w-32 rounded-[1.35rem] border border-white/20 bg-[#071a43] p-3">
+                          <div className="mx-auto mb-5 h-1.5 w-9 rounded-full bg-white/35" />
+                          <div className="grid place-items-center pt-3 text-center">
+                            <div className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-orange-400 text-white shadow-lg">
+                              <Icon name="bell" className="h-7 w-7" />
+                            </div>
+                            <div className="text-base font-black leading-tight text-white">
+                              Result Update
+                              <br />
+                              Available
+                            </div>
+                            <div className="mt-4 rounded-full bg-white px-3 py-2 text-[11px] font-black text-orange-600">
+                              View Result
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="absolute bottom-2 left-3 grid h-16 w-16 place-items-center rounded-3xl bg-[#10234c] text-white shadow-xl">
+                        <Icon name="check" className="h-8 w-8" />
+                      </div>
+
+                      <div className="absolute right-0 top-12 text-orange-400">
+                        <Icon name="sparkles" className="h-8 w-8" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-3 text-xs font-black text-slate-600 sm:text-sm">
+                  <span className="flex items-center gap-2">
+                    <Icon name="shield" className="h-4 w-4 text-indigo-700" />
+                    Secure
+                  </span>
+                  <span className="text-slate-300">•</span>
+                  <span>Private</span>
+                  <span className="text-slate-300">•</span>
+                  <span>Verified Alerts Only</span>
+                </div>
               </div>
             </section>
 
-            <section className="order-1 lg:order-2">
+            <section>
               <form
                 onSubmit={handleSubmit}
-                className="rounded-[1.7rem] bg-gradient-to-br from-orange-100 via-white to-indigo-100 p-[2px] shadow-[0_28px_75px_rgba(15,23,42,0.12)]"
+                className="h-full rounded-[1.7rem] bg-gradient-to-br from-orange-100 via-white to-blue-100 p-[2px] shadow-[0_28px_75px_rgba(15,23,42,0.12)]"
               >
-                <div className="relative rounded-[1.6rem] bg-white/95 p-5 backdrop-blur sm:p-7 lg:p-8">
-                  <div className="pointer-events-none absolute right-7 top-7 text-orange-300">
-                    ✦
-                  </div>
-                  <div className="pointer-events-none absolute right-12 top-14 text-amber-300">
-                    ✦
-                  </div>
-
-                  <div className="mb-6 flex items-start gap-4">
-                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#062b69] to-[#06163e] text-white shadow-[0_18px_35px_rgba(8,21,66,0.25)] sm:h-20 sm:w-20">
-                      <Icon name="graduation" className="h-8 w-8 sm:h-10 sm:w-10" />
-                    </div>
-                    <div>
-                      <h2 className="text-3xl font-black tracking-tight text-[#07112f] sm:text-4xl">
-                        Register Details
-                      </h2>
-                      <p className="mt-2 text-sm font-medium leading-6 text-slate-600 sm:text-base">
-                        Enter details and track result status securely.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-5">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <label className="grid gap-2">
-                        <span className="text-sm font-black text-slate-900">
-                          Student Name
-                        </span>
-                        <div className="relative">
-                          <FieldIcon name="user" />
-                          <input
-                            value={studentName}
-                            onChange={(event) =>
-                              setStudentName(event.target.value)
-                            }
-                            className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
-                            placeholder="Enter your name"
-                          />
-                        </div>
-                      </label>
-
-                      <label className="grid gap-2">
-                        <span className="text-sm font-black text-slate-900">
-                          Roll Number
-                        </span>
-                        <div className="relative">
-                          <FieldIcon name="hash" />
-                          <input
-                            value={rollNo}
-                            onChange={(event) => setRollNo(event.target.value)}
-                            className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
-                            placeholder="Enter roll number"
-                          />
-                        </div>
-                      </label>
+                <div className="relative h-full rounded-[1.6rem] bg-white/95 backdrop-blur">
+                  <div className="overflow-hidden rounded-t-[1.6rem] bg-gradient-to-br from-orange-100 via-white to-blue-100 px-5 py-6 sm:px-7 sm:py-7">
+                    <div className="pointer-events-none absolute right-7 top-7 text-orange-300">
+                      <Icon name="sparkles" className="h-7 w-7" />
                     </div>
 
-                    <label className="grid gap-2">
-                      <span className="text-sm font-black text-slate-900">
-                        WhatsApp / Mobile Number
-                      </span>
-                      <div className="relative">
-                        <FieldIcon name="phone" />
-                        <input
-                          value={mobile}
-                          onChange={(event) => setMobile(event.target.value)}
-                          className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
-                          placeholder="Enter mobile number"
+                    <div className="flex items-start gap-4">
+                      <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#062b69] to-[#06163e] text-white shadow-[0_18px_35px_rgba(8,21,66,0.25)] sm:h-20 sm:w-20">
+                        <Icon
+                          name="graduation"
+                          className="h-8 w-8 sm:h-10 sm:w-10"
                         />
                       </div>
 
-                      <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-900">
-                        WhatsApp result/update sirf verified alert-list numbers
-                        par jayega. Status page sab students ke liye available
-                        rahega.
-                      </div>
-                    </label>
-
-                    <div className="grid gap-3">
                       <div>
-                        <h3 className="text-lg font-black text-slate-950">
-                          Course / Result Option
-                        </h3>
-                        <p className="mt-1 text-sm font-medium text-slate-500">
-                          {selectedGroup?.subtitle ||
-                            "Select exact course from official result options"}
+                        <h2 className="text-3xl font-black tracking-tight text-[#07122f] sm:text-4xl">
+                          Register Details
+                        </h2>
+                        <p className="mt-2 text-sm font-medium leading-6 text-slate-600 sm:text-base">
+                          Enter your details and get result alerts.
                         </p>
                       </div>
+                    </div>
+                  </div>
 
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {groups.map((group) => {
-                          const isActive = activeGroup === group.id;
-                          const count = group.options?.length || 0;
+                  <div className="px-5 py-5 sm:px-7 sm:py-6">
+                    <div className="grid gap-5">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label className="grid gap-2">
+                          <span className="text-sm font-black text-slate-900">
+                            Student Name
+                          </span>
+                          <div className="relative">
+                            <FieldIcon name="user" />
+                            <input
+                              value={studentName}
+                              onChange={(event) =>
+                                setStudentName(event.target.value)
+                              }
+                              className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
+                              placeholder="Enter your name"
+                            />
+                          </div>
+                        </label>
 
-                          return (
-                            <button
-                              key={group.id}
-                              type="button"
-                              onClick={() => {
-                                setActiveGroup(group.id);
-                                setSearch("");
-                                setSelectedValue("");
-                              }}
-                              className={cls(
-                                "flex min-h-[3.25rem] items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-black transition",
-                                isActive
-                                  ? "border-[#071a43] bg-[#071a43] text-white shadow-[0_10px_24px_rgba(7,26,67,0.20)]"
-                                  : "border-slate-200 bg-white text-[#1b2559] hover:border-orange-200 hover:bg-orange-50"
-                              )}
-                            >
-                              <span className="flex min-w-0 items-center gap-2">
-                                <span
-                                  className={cls(
-                                    "grid h-7 w-7 shrink-0 place-items-center rounded-full",
-                                    isActive
-                                      ? "bg-white text-orange-600"
-                                      : "bg-orange-50 text-orange-600"
-                                  )}
-                                >
-                                  <Icon name="check" className="h-3.5 w-3.5" />
-                                </span>
-                                <span className="line-clamp-2">{group.label}</span>
-                              </span>
-
-                              <span
-                                className={cls(
-                                  "shrink-0 rounded-full px-3 py-1 text-xs font-black",
-                                  isActive
-                                    ? "bg-orange-500 text-white"
-                                    : count
-                                    ? "bg-indigo-50 text-indigo-700"
-                                    : "bg-slate-100 text-slate-400"
-                                )}
-                              >
-                                {count}
-                              </span>
-                            </button>
-                          );
-                        })}
+                        <label className="grid gap-2">
+                          <span className="text-sm font-black text-slate-900">
+                            Roll Number
+                          </span>
+                          <div className="relative">
+                            <FieldIcon name="hash" />
+                            <input
+                              value={rollNo}
+                              onChange={(event) =>
+                                setRollNo(event.target.value)
+                              }
+                              className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
+                              placeholder="Enter roll number"
+                            />
+                          </div>
+                        </label>
                       </div>
 
-                      <div className="relative">
-                        <FieldIcon name="search" />
-                        <input
-                          value={search}
-                          onChange={(event) => {
-                            setSearch(event.target.value);
-                            setSelectedValue("");
-                          }}
-                          className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
-                          placeholder="Search: M.COM, BSC, B.A, B.ED..."
-                        />
-                      </div>
+                      <label className="grid gap-2">
+                        <span className="text-sm font-black text-slate-900">
+                          WhatsApp / Mobile Number
+                        </span>
+                        <div className="relative">
+                          <FieldIcon name="phone" />
+                          <input
+                            value={mobile}
+                            onChange={(event) => setMobile(event.target.value)}
+                            className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
+                            placeholder="Enter mobile number"
+                          />
+                        </div>
+                      </label>
 
-                      <div className="relative">
-                        <FieldIcon name="list" />
-                        <select
-                          value={selectedValue}
-                          onChange={(event) =>
-                            setSelectedValue(event.target.value)
-                          }
-                          className="h-14 w-full appearance-none rounded-2xl border border-slate-200 bg-white pl-16 pr-12 text-sm font-black text-[#1b2559] outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
-                          disabled={loadingOptions}
-                        >
-                          <option value="">
-                            {loadingOptions
-                              ? "Loading options..."
-                              : activeOptions.length
-                              ? "Select course / result option"
-                              : "No option found"}
-                          </option>
+                      <div className="grid gap-3">
+                        <div>
+                          <h3 className="text-lg font-black text-slate-950">
+                            Course / Result Option
+                          </h3>
+                          <p className="mt-1 text-sm font-medium text-slate-500">
+                            Select the result category that matches your course.
+                          </p>
+                        </div>
 
-                          {activeOptions.map((option, index) => {
-                            const key = `${option.yearPart || option.label}__${
-                              option.formUrl || ""
-                            }`;
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {groups.map((group) => {
+                            const isActive = activeGroup === group.id;
+                            const count = group.options?.length || 0;
 
                             return (
-                              <option key={`${key}_${index}`} value={key}>
-                                {option.label || option.yearPart}
-                              </option>
+                              <button
+                                key={group.id}
+                                type="button"
+                                onClick={() => {
+                                  setActiveGroup(group.id);
+                                  setSearch("");
+                                  setSelectedValue("");
+                                }}
+                                className={cls(
+                                  "flex min-h-[3.25rem] items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-black transition",
+                                  isActive
+                                    ? "border-[#071a43] bg-[#071a43] text-white shadow-[0_10px_24px_rgba(7,26,67,0.20)]"
+                                    : "border-slate-200 bg-white text-[#1b2559] hover:border-orange-200 hover:bg-orange-50"
+                                )}
+                              >
+                                <span className="min-w-0 leading-5">
+                                  {group.label}
+                                </span>
+
+                                <span
+                                  className={cls(
+                                    "shrink-0 rounded-full px-3 py-1 text-xs font-black",
+                                    isActive
+                                      ? "bg-orange-500 text-white"
+                                      : count
+                                      ? "bg-indigo-50 text-indigo-700"
+                                      : "bg-slate-100 text-slate-400"
+                                  )}
+                                >
+                                  {count}
+                                </span>
+                              </button>
                             );
                           })}
-                        </select>
-
-                        <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[#1b2559]">
-                          <Icon name="chevron" className="h-5 w-5" />
-                        </span>
-                      </div>
-
-                      {loadingOptions ? (
-                        <div className="rounded-2xl border border-orange-100 bg-orange-50 p-3 text-xs font-bold text-orange-800">
-                          Official result options load ho rahe hain...
                         </div>
-                      ) : null}
 
-                      {optionsError ? (
-                        <div className="rounded-2xl border border-red-100 bg-red-50 p-3 text-xs font-bold text-red-700">
-                          {optionsError}
+                        <div className="relative">
+                          <FieldIcon name="search" />
+                          <input
+                            value={search}
+                            onChange={(event) => {
+                              setSearch(event.target.value);
+                              setSelectedValue("");
+                            }}
+                            className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-16 pr-4 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
+                            placeholder="Search: M.COM, BSC, B.A, B.ED..."
+                          />
                         </div>
-                      ) : null}
 
-                      {selectedOption ? (
-                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-6 text-emerald-800">
-                          <b>Selected:</b>{" "}
-                          {selectedOption.yearPart || selectedOption.label}
+                        <div className="relative">
+                          <FieldIcon name="list" />
+                          <select
+                            value={selectedValue}
+                            onChange={(event) =>
+                              setSelectedValue(event.target.value)
+                            }
+                            className="h-14 w-full appearance-none rounded-2xl border border-slate-200 bg-white pl-16 pr-12 text-sm font-black text-[#1b2559] outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 sm:h-16 sm:text-base"
+                            disabled={loadingOptions}
+                          >
+                            <option value="">
+                              {loadingOptions
+                                ? "Loading options..."
+                                : activeOptions.length
+                                ? "Select course / result option"
+                                : "No option found"}
+                            </option>
+
+                            {activeOptions.map((option, index) => {
+                              const key = `${
+                                option.yearPart || option.label
+                              }__${option.formUrl || ""}`;
+
+                              return (
+                                <option key={`${key}_${index}`} value={key}>
+                                  {option.label || option.yearPart}
+                                </option>
+                              );
+                            })}
+                          </select>
+
+                          <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[#1b2559]">
+                            <Icon name="chevron" className="h-5 w-5" />
+                          </span>
                         </div>
-                      ) : null}
-                    </div>
 
-                    <label className="flex items-start gap-4 rounded-2xl border border-orange-100 bg-orange-50/70 p-4 text-sm font-semibold leading-6 text-slate-700 sm:p-5">
-                      <input
-                        type="checkbox"
-                        checked={consentAdminPreview}
-                        onChange={(event) =>
-                          setConsentAdminPreview(event.target.checked)
-                        }
-                        className="mt-1 h-5 w-5 rounded border-orange-300 accent-orange-500"
-                      />
-                      <span>
-                        I agree that Apni Library admin team can receive my
-                        result preview for verification.
-                      </span>
-                    </label>
+                        {loadingOptions ? (
+                          <div className="rounded-2xl border border-orange-100 bg-orange-50 p-3 text-xs font-bold text-orange-800">
+                            Loading course options...
+                          </div>
+                        ) : null}
 
-                    <button
-                      type="submit"
-                      disabled={submitting || loadingOptions}
-                      className="group relative h-14 overflow-hidden rounded-2xl bg-gradient-to-r from-orange-500 via-orange-600 to-red-500 px-6 text-base font-black text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 sm:h-16 sm:text-lg"
-                    >
-                      <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition duration-700 group-hover:translate-x-full" />
-                      <span className="relative inline-flex items-center justify-center gap-3">
-                        <Icon name="bell" className="h-5 w-5" />
-                        {submitting ? "Registering..." : "Register Result Alert"}
-                      </span>
-                    </button>
+                        {optionsError ? (
+                          <div className="rounded-2xl border border-red-100 bg-red-50 p-3 text-xs font-bold text-red-700">
+                            {optionsError}
+                          </div>
+                        ) : null}
 
-                    {status ? (
-                      <div
-                        className={cls(
-                          "rounded-2xl p-4 text-sm font-bold leading-6 sm:p-5",
-                          status.type === "success"
-                            ? "border border-emerald-100 bg-emerald-50 text-emerald-800"
-                            : "border border-red-100 bg-red-50 text-red-700"
-                        )}
-                      >
-                        {status.message}
-
-                        {status.type === "success" ? (
-                          <div className="mt-4 flex flex-wrap gap-3">
-                            <a
-                              href="/result-status"
-                              className="inline-flex rounded-full bg-white px-5 py-2.5 text-xs font-black text-slate-900 ring-1 ring-slate-200"
-                            >
-                              Check Status
-                            </a>
-                            <a
-                              href="/"
-                              className="inline-flex rounded-full bg-white px-5 py-2.5 text-xs font-black text-slate-900 ring-1 ring-slate-200"
-                            >
-                              Go Home
-                            </a>
+                        {selectedOption ? (
+                          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-6 text-emerald-800">
+                            <b>Selected:</b>{" "}
+                            {selectedOption.yearPart || selectedOption.label}
                           </div>
                         ) : null}
                       </div>
-                    ) : null}
 
-                    <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-500">
-                      <Icon name="lock" className="h-3.5 w-3.5" />
-                      Your details are secure and used only for result tracking.
+                      <label className="flex items-start gap-4 rounded-2xl border border-orange-100 bg-orange-50/70 p-4 text-sm font-semibold leading-6 text-slate-700 sm:p-5">
+                        <input
+                          type="checkbox"
+                          checked={consentAdminPreview}
+                          onChange={(event) =>
+                            setConsentAdminPreview(event.target.checked)
+                          }
+                          className="mt-1 h-5 w-5 rounded border-orange-300 accent-orange-500"
+                        />
+                        <span>
+                          I agree to receive result alerts and important updates.
+                        </span>
+                      </label>
+
+                      <button
+                        type="submit"
+                        disabled={submitting || loadingOptions}
+                        className="group relative h-14 overflow-hidden rounded-2xl bg-gradient-to-r from-orange-500 via-orange-600 to-red-500 px-6 text-base font-black text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 sm:h-16 sm:text-lg"
+                      >
+                        <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition duration-700 group-hover:translate-x-full" />
+                        <span className="relative inline-flex items-center justify-center gap-3">
+                          <Icon name="bell" className="h-5 w-5" />
+                          {submitting
+                            ? "Registering..."
+                            : "Register Result Alert"}
+                        </span>
+                      </button>
+
+                      {status ? (
+                        <div
+                          className={cls(
+                            "rounded-2xl p-4 text-sm font-bold leading-6 sm:p-5",
+                            status.type === "success"
+                              ? "border border-emerald-100 bg-emerald-50 text-emerald-800"
+                              : "border border-red-100 bg-red-50 text-red-700"
+                          )}
+                        >
+                          {status.message}
+
+                          {status.type === "success" ? (
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <a
+                                href="/result-status"
+                                className="inline-flex rounded-full bg-white px-5 py-2.5 text-xs font-black text-slate-900 ring-1 ring-slate-200"
+                              >
+                                Check Status
+                              </a>
+                              <a
+                                href="/"
+                                className="inline-flex rounded-full bg-white px-5 py-2.5 text-xs font-black text-slate-900 ring-1 ring-slate-200"
+                              >
+                                Go Home
+                              </a>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <div className="flex items-center justify-center gap-2 text-center text-xs font-bold text-slate-500">
+                        <Icon name="lock" className="h-3.5 w-3.5" />
+                        We respect your privacy. Your details are safe with us.
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -822,4 +831,4 @@ export default function ResultAlertPage() {
       </section>
     </main>
   );
-          }
+      }
