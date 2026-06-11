@@ -16,6 +16,39 @@ function escapeTelegram(value) {
     .replace(/>/g, "&gt;");
 }
 
+function normalizeMobile(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+
+  if (!digits) return "";
+
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
+
+  return digits;
+}
+
+function getVerifiedWhatsAppNumbers() {
+  const raw = process.env.WHATSAPP_VERIFIED_NUMBERS || "";
+
+  return new Set(
+    raw
+      .split(",")
+      .map((item) => normalizeMobile(item))
+      .filter(Boolean)
+  );
+}
+
+function isVerifiedWhatsAppNumber(mobile) {
+  const normalized = normalizeMobile(mobile);
+
+  if (!normalized) return false;
+
+  const verifiedNumbers = getVerifiedWhatsAppNumbers();
+
+  return verifiedNumbers.has(normalized);
+}
+
 function getWorkerUrl() {
   const url = process.env.WORKER_URL;
 
@@ -330,6 +363,12 @@ export default async function handler(req, res) {
           let adminTelegramResult = null;
           let studentWhatsApp = null;
 
+          const marksSummary =
+            workerResult.marksSummary || workerResult.textPreview || "";
+
+          const registrationMobile = normalizeMobile(registration?.mobile || "");
+          const whatsappVerified = isVerifiedWhatsAppNumber(registrationMobile);
+
           if (!adminTelegramAlreadySent) {
             adminTelegramResult = await sendTelegramMessage({
               chatId:
@@ -341,27 +380,35 @@ export default async function handler(req, res) {
                 yearPart: item.yearPart,
                 resultType: item.resultType || "MAIN",
                 officialUrl: formUrl,
-                marksSummary:
-                  workerResult.marksSummary ||
-                  workerResult.textPreview ||
-                  "",
+                marksSummary,
                 studentName: registration?.studentName || "",
                 mobile: registration?.mobile || ""
               })
             });
           }
 
-          if (registration?.mobile && !studentWhatsAppAlreadySent) {
+          if (
+            registrationMobile &&
+            whatsappVerified &&
+            !studentWhatsAppAlreadySent
+          ) {
             studentWhatsApp = await sendWhatsAppStudentResultAuto({
-              to: registration.mobile,
+              to: registrationMobile,
               rollNo: item.rollNo,
               yearPart: item.yearPart,
-              resultSummary: makeWhatsAppShortSummary(
-                workerResult.marksSummary || workerResult.textPreview || ""
-              ),
+              resultSummary: makeWhatsAppShortSummary(marksSummary),
               officialUrl: formUrl
             });
           }
+
+          const studentWhatsAppSkipped =
+            Boolean(registrationMobile) &&
+            !whatsappVerified &&
+            !studentWhatsAppAlreadySent;
+
+          const studentWhatsAppSkipReason = studentWhatsAppSkipped
+            ? "WhatsApp number verified alert list me nahi hai."
+            : "";
 
           await outputRef.set(
             {
@@ -382,6 +429,9 @@ export default async function handler(req, res) {
                 outputOld.adminTelegramMessageId ||
                 null,
 
+              mobileVerifiedForWhatsApp: whatsappVerified,
+              whatsappDeliveryRule: "verified_numbers_only",
+
               studentWhatsAppSent:
                 studentWhatsApp?.success ||
                 outputOld.studentWhatsAppSent ||
@@ -395,6 +445,8 @@ export default async function handler(req, res) {
                 studentWhatsApp && !studentWhatsApp.success
                   ? studentWhatsApp.error
                   : outputOld.studentWhatsAppLastError || "",
+              studentWhatsAppSkipped,
+              studentWhatsAppSkipReason,
 
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
@@ -435,6 +487,9 @@ export default async function handler(req, res) {
                     outputOld.adminTelegramMessageId ||
                     null,
 
+                  mobileVerifiedForWhatsApp: whatsappVerified,
+                  whatsappDeliveryRule: "verified_numbers_only",
+
                   studentWhatsAppSent:
                     studentWhatsApp?.success ||
                     outputOld.studentWhatsAppSent ||
@@ -445,6 +500,8 @@ export default async function handler(req, res) {
                     studentWhatsApp && !studentWhatsApp.success
                       ? studentWhatsApp.error
                       : outputOld.studentWhatsAppLastError || "",
+                  studentWhatsAppSkipped,
+                  studentWhatsAppSkipReason,
 
                   updatedAt: FieldValue.serverTimestamp()
                 },
@@ -462,6 +519,7 @@ export default async function handler(req, res) {
             yearPart: item.yearPart,
             status: "result_found",
             adminTelegramSent: true,
+            mobileVerifiedForWhatsApp: whatsappVerified,
             studentWhatsAppSent:
               studentWhatsApp?.success ||
               outputOld.studentWhatsAppSent ||
@@ -470,6 +528,8 @@ export default async function handler(req, res) {
               studentWhatsApp?.method ||
               outputOld.studentWhatsApp?.method ||
               "",
+            studentWhatsAppSkipped,
+            studentWhatsAppSkipReason,
             studentWhatsAppError:
               studentWhatsApp && !studentWhatsApp.success
                 ? studentWhatsApp.error
@@ -603,4 +663,4 @@ export default async function handler(req, res) {
     await logEvent("queue", "error", err.message, {});
     return safeJsonError(res, err);
   }
-    }
+            }
