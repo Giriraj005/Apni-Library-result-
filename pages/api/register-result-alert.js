@@ -1,25 +1,69 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
-import {
-  cleanText,
-  getYearPart,
-  normalizeRollNo,
-  safeJsonError
-} from "../../lib/security";
-import { makeRegistrationKey } from "../../lib/resultQueue";
-import { logEvent } from "../../lib/logger";
-import {
-  resultTypeLabel,
-  getFormUrlForYearPart
-} from "../../lib/resultCourseCatalog";
+import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
+
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function cleanRoll(value) {
+  return String(value || "").replace(/\s+/g, "").trim();
+}
+
+function safeKey(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/&/g, "AND")
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+}
+
+function makeRegistrationKey({ rollNo, yearPart, resultType, targetYear }) {
+  return [
+    safeKey(rollNo),
+    safeKey(yearPart),
+    safeKey(resultType || "MAIN"),
+    safeKey(targetYear || "2025-26")
+  ]
+    .filter(Boolean)
+    .join("_");
+}
 
 function normalizeMobile(value) {
   const digits = String(value || "").replace(/\D/g, "");
 
   if (!digits) return "";
 
-  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
+
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return digits;
+  }
 
   return digits;
+}
+
+function getVerifiedWhatsAppNumbers() {
+  const raw = process.env.WHATSAPP_VERIFIED_NUMBERS || "";
+
+  return new Set(
+    raw
+      .split(",")
+      .map((item) => normalizeMobile(item))
+      .filter(Boolean)
+  );
+}
+
+function isVerifiedWhatsAppNumber(mobile) {
+  const normalized = normalizeMobile(mobile);
+
+  if (!normalized) return false;
+
+  const verifiedNumbers = getVerifiedWhatsAppNumbers();
+
+  return verifiedNumbers.has(normalized);
 }
 
 export default async function handler(req, res) {
@@ -33,146 +77,147 @@ export default async function handler(req, res) {
 
     const body = req.body || {};
 
-    const studentName = cleanText(body.studentName);
-    const course = cleanText(body.course).toUpperCase();
-    const semester = cleanText(body.semester).toUpperCase();
-    const inputYearPart = cleanText(body.yearPart || body.courseOption || "");
-    const inputFormUrl = cleanText(body.formUrl || "");
-    const formKey = cleanText(body.formKey || "");
-
-    const resultType = resultTypeLabel(
-      body.resultType || process.env.DEFAULT_RESULT_TYPE || "MAIN"
+    const studentName = cleanText(body.studentName || body.name);
+    const rollNo = cleanRoll(body.rollNo || body.rollNumber);
+    const yearPart = cleanText(body.yearPart || body.course || body.selectedCourse);
+    const resultType = cleanText(body.resultType || "MAIN").toUpperCase();
+    const targetYear = cleanText(
+      body.targetYear || process.env.TARGET_RESULT_YEAR || "2025-26"
     );
 
-    const rollNo = normalizeRollNo(body.rollNo);
-    const mobile = normalizeMobile(body.mobile);
+    const mobile = normalizeMobile(body.mobile || body.whatsapp || body.phone);
+    const formUrl = cleanText(
+      body.formUrl || getFormUrlForYearPart(yearPart, body.formUrl)
+    );
+    const formKey = cleanText(body.formKey || "");
+    const source = cleanText(body.source || "student_registration");
 
-    const consentTelegramGroup = Boolean(body.consentTelegramGroup);
-    const consentWhatsAppResult = Boolean(body.consentWhatsAppResult);
+    const consentAdminPreview = Boolean(
+      body.consentAdminPreview ||
+        body.adminConsent ||
+        body.consent ||
+        body.agree
+    );
 
     if (!studentName) {
       return res.status(400).json({
         success: false,
-        error: "Student name is required"
+        error: "Student name required hai."
       });
     }
 
-    if (!rollNo) {
+    if (!rollNo || rollNo.length < 3) {
       return res.status(400).json({
         success: false,
-        error: "Roll number is required"
+        error: "Valid roll number required hai."
       });
     }
 
-    if (!inputYearPart && !course) {
+    if (!yearPart) {
       return res.status(400).json({
         success: false,
-        error: "Please select course/result option"
+        error: "Course / year part select karo."
       });
     }
 
-    if (!mobile) {
+    if (!formUrl) {
       return res.status(400).json({
         success: false,
-        error: "WhatsApp mobile number is required"
+        error: "Official result form missing hai. Course dobara select karo."
       });
     }
 
-    if (!consentTelegramGroup) {
+    if (!consentAdminPreview) {
       return res.status(400).json({
         success: false,
-        error: "Telegram result alert consent is required"
+        error: "Verification consent required hai."
       });
     }
 
-    if (!consentWhatsAppResult) {
-      return res.status(400).json({
-        success: false,
-        error: "WhatsApp result alert consent is required"
-      });
-    }
-
-    const yearPart = getYearPart(course || inputYearPart, semester, inputYearPart);
-    const formUrl = getFormUrlForYearPart(yearPart, inputFormUrl);
-
-    const id = makeRegistrationKey({
+    const registrationId = makeRegistrationKey({
       rollNo,
-      course: yearPart,
-      semester: semester || "",
-      resultType
-    });
-
-    const ref = db.collection("result_registrations").doc(id);
-    const existing = await ref.get();
-
-    const payload = {
-      rollNo,
-      course: course || yearPart,
-      semester: semester || "",
       yearPart,
       resultType,
+      targetYear
+    });
+
+    const registrationRef = db
+      .collection("result_registrations")
+      .doc(registrationId);
+
+    const existingSnap = await registrationRef.get();
+
+    if (existingSnap.exists) {
+      const existing = existingSnap.data() || {};
+
+      return res.status(409).json({
+        success: false,
+        duplicate: true,
+        error:
+          "Ye roll number is course aur result type ke liye already registered hai.",
+        registrationId,
+        status: existing.status || "registered",
+        rollNo,
+        yearPart,
+        resultType,
+        targetYear
+      });
+    }
+
+    const mobileVerifiedForWhatsApp = isVerifiedWhatsAppNumber(mobile);
+    const now = FieldValue.serverTimestamp();
+
+    await registrationRef.set({
+      registrationId,
+      studentName,
+      rollNo,
+      rollNumber: rollNo,
+      yearPart,
+      course: yearPart,
+      resultType,
+      targetYear,
+      mobile,
       formUrl,
       formKey,
+      source,
 
-      studentName,
-      mobile,
+      consentAdminPreview: true,
 
-      consentTelegramGroup,
-      consentWhatsAppResult,
+      mobileVerifiedForWhatsApp,
+      whatsappDeliveryAllowed: mobileVerifiedForWhatsApp,
+      whatsappDeliveryRule: "verified_numbers_only",
 
-      status: "waiting",
+      status: "registered",
       resultFound: false,
-
       adminTelegramSent: false,
       studentWhatsAppSent: false,
+      studentWhatsAppSkipped: false,
+      studentWhatsAppSkipReason: "",
 
-      updatedAt: FieldValue.serverTimestamp()
-    };
-
-    if (existing.exists) {
-      await ref.set(payload, {
-        merge: true
-      });
-
-      return res.status(200).json({
-        success: true,
-        updated: true,
-        trackingId: id,
-        status: "waiting",
-        yearPart,
-        formUrl,
-        formKey,
-        message: "Registration already existed, details updated successfully."
-      });
-    }
-
-    await ref.set({
-      ...payload,
-      resultId: null,
-      createdAt: FieldValue.serverTimestamp()
-    });
-
-    await logEvent("registration", "info", "Student registered for result alert", {
-      rollNo,
-      studentName,
-      mobile,
-      yearPart,
-      resultType,
-      formUrl,
-      formKey
+      createdAt: now,
+      updatedAt: now
     });
 
     return res.status(200).json({
       success: true,
-      updated: false,
-      trackingId: id,
-      status: "waiting",
+      registrationId,
+      rollNo,
       yearPart,
-      formUrl,
-      formKey,
-      message: "Result alert registration successful."
+      resultType,
+      targetYear,
+      mobile,
+      mobileVerifiedForWhatsApp,
+      whatsappDeliveryAllowed: mobileVerifiedForWhatsApp,
+      message: mobileVerifiedForWhatsApp
+        ? "Registration successful. Aapka number verified alert list me hai, result/update WhatsApp par bhi aa sakta hai."
+        : "Registration successful. Aapka number verified WhatsApp alert list me nahi hai, result status page par update dikhega."
     });
   } catch (err) {
-    return safeJsonError(res, err);
+    console.error("register-result-alert error:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Registration failed"
+    });
   }
 }
