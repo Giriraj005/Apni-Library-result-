@@ -2,80 +2,109 @@ import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
 import {
   OFFICIAL_MAIN_PORTAL,
-  RESULT_FORM_CANDIDATES
+  RESULT_FORM_CANDIDATES,
+  validateResultLink
 } from "../../lib/resultCourseCatalog";
-import { validateResultLink } from "../../lib/resultLinkValidator";
-import { logEvent } from "../../lib/logger";
 
-const DEFAULT_LIMIT = 200;
+const DEFAULT_TEMPLATE_NAME = "pdusu_result_update_v2";
+const DEFAULT_TEMPLATE_LANG = "en_US";
+const BATCH_SIZE = 20;
 
-function normalizeWhatsAppNumber(value) {
+function normalizeMobile(value) {
   const digits = String(value || "").replace(/\D/g, "");
 
   if (!digits) return "";
 
-  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
 
   return digits;
 }
 
-function cleanId(value) {
+function getVerifiedWhatsAppNumbers() {
+  const raw = process.env.WHATSAPP_VERIFIED_NUMBERS || "";
+
+  return new Set(
+    raw
+      .split(",")
+      .map((item) => normalizeMobile(item))
+      .filter(Boolean)
+  );
+}
+
+function isVerifiedWhatsAppNumber(mobile) {
+  const normalized = normalizeMobile(mobile);
+
+  if (!normalized) return false;
+
+  const verifiedNumbers = getVerifiedWhatsAppNumbers();
+
+  return verifiedNumbers.has(normalized);
+}
+
+function safeKey(value) {
   return String(value || "")
-    .replace(/[^a-z0-9]/gi, "_")
-    .replace(/_+/g, "_")
+    .toUpperCase()
+    .replace(/&/g, "AND")
+    .replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
-    .slice(0, 180);
+    .slice(0, 120);
 }
 
-function trimTemplateText(value, max = 900) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-
-  if (text.length <= max) return text;
-
-  return `${text.slice(0, max - 3)}...`;
+function makeNotificationId({ rollNo, yearPart, resultType, targetYear, formUrl }) {
+  return [
+    safeKey(rollNo),
+    safeKey(yearPart),
+    safeKey(resultType || "MAIN"),
+    safeKey(targetYear || "2025-26"),
+    safeKey(formUrl)
+  ]
+    .filter(Boolean)
+    .join("_");
 }
 
-async function sendTemplateToUser({ to, title, resultLink, mainPortal }) {
+async function sendRegisteredUpdateTemplate({
+  to,
+  title,
+  resultLink,
+  mainPortal
+}) {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
 
   if (!phoneNumberId) {
-    throw new Error("WHATSAPP_PHONE_NUMBER_ID is missing");
+    throw new Error("WHATSAPP_PHONE_NUMBER_ID missing");
   }
 
-  if (!token) {
-    throw new Error("WHATSAPP_ACCESS_TOKEN is missing");
+  if (!accessToken) {
+    throw new Error("WHATSAPP_ACCESS_TOKEN missing");
   }
 
   const templateName =
     process.env.WHATSAPP_REGISTERED_UPDATE_TEMPLATE_NAME ||
-    "pdusu_result_update_v2";
+    DEFAULT_TEMPLATE_NAME;
 
-  const languageCode =
-    process.env.WHATSAPP_REGISTERED_UPDATE_TEMPLATE_LANG || "en_US";
-
-  const recipient = normalizeWhatsAppNumber(to);
-
-  if (!recipient) {
-    throw new Error("Recipient WhatsApp number is missing");
-  }
+  const language =
+    process.env.WHATSAPP_REGISTERED_UPDATE_TEMPLATE_LANG ||
+    DEFAULT_TEMPLATE_LANG;
 
   const response = await fetch(
     `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
         messaging_product: "whatsapp",
-        to: recipient,
+        to,
         type: "template",
         template: {
           name: templateName,
           language: {
-            code: languageCode
+            code: language
           },
           components: [
             {
@@ -83,15 +112,15 @@ async function sendTemplateToUser({ to, title, resultLink, mainPortal }) {
               parameters: [
                 {
                   type: "text",
-                  text: trimTemplateText(title)
+                  text: title
                 },
                 {
                   type: "text",
-                  text: trimTemplateText(resultLink)
+                  text: resultLink
                 },
                 {
                   type: "text",
-                  text: trimTemplateText(mainPortal)
+                  text: mainPortal
                 }
               ]
             }
@@ -101,20 +130,27 @@ async function sendTemplateToUser({ to, title, resultLink, mainPortal }) {
     }
   );
 
-  const data = await response.json();
+  const data = await response.json().catch(() => null);
 
   if (!response.ok) {
     throw new Error(
       data?.error?.message ||
-        data?.error?.error_data?.details ||
-        "WhatsApp registered update send failed"
+        data?.error ||
+        `WhatsApp API failed with ${response.status}`
     );
   }
 
-  return data;
+  return {
+    success: true,
+    method: "template",
+    templateName,
+    language,
+    data
+  };
 }
 
-async function getActiveForms() {
+async function getActiveFormUrls() {
+  const activeFormUrls = [];
   const forms = [];
 
   for (const form of RESULT_FORM_CANDIDATES) {
@@ -122,153 +158,192 @@ async function getActiveForms() {
       const validation = await validateResultLink(form.url);
 
       forms.push({
-        ...form,
-        valid: Boolean(validation.valid),
-        reason: validation.reason || "",
-        status: validation.status || null
+        key: form.key,
+        label: form.label,
+        url: form.url,
+        ...validation
       });
+
+      if (validation.valid) {
+        activeFormUrls.push(form.url);
+      }
     } catch (err) {
       forms.push({
-        ...form,
+        key: form.key,
+        label: form.label,
+        url: form.url,
         valid: false,
-        reason: err.message || "validation_failed",
-        status: null
+        error: err.message || "validation failed"
       });
     }
   }
 
-  return forms;
-}
-
-function shouldSendToRegistration(reg, activeFormUrls) {
-  if (!reg.mobile) return false;
-
-  if (reg.consentWhatsAppResult === false) return false;
-
-  if (!reg.formUrl) return false;
-
-  return activeFormUrls.includes(reg.formUrl);
-}
-
-function makeNotificationId({ rollNo, yearPart, formUrl }) {
-  const targetYear = process.env.TARGET_RESULT_YEAR || "2025-26";
-
-  return `registered_result_update_${cleanId(targetYear)}_${cleanId(
-    rollNo
-  )}_${cleanId(yearPart)}_${cleanId(formUrl)}`;
+  return {
+    activeFormUrls,
+    forms
+  };
 }
 
 export default async function handler(req, res) {
   try {
     requireCron(req);
 
-    const force = String(req.query.force || "") === "1";
-    const dryRun = String(req.query.dry || "") === "1";
-    const limit = Math.min(
-      Number(req.query.limit || DEFAULT_LIMIT) || DEFAULT_LIMIT,
-      500
-    );
+    const dryRun = req.query.dry === "1";
+    const force = req.query.force === "1";
+    const targetYear = process.env.TARGET_RESULT_YEAR || "2025-26";
 
-    const activeForms = await getActiveForms();
-    const activeFormUrls = activeForms
-      .filter((form) => form.valid)
-      .map((form) => form.url);
+    const { activeFormUrls, forms } = await getActiveFormUrls();
 
     if (!activeFormUrls.length) {
       return res.status(200).json({
         success: true,
-        mode: "notify_registered_result_update",
+        dryRun,
+        force,
+        activeFormUrls,
+        forms,
+        processed: 0,
         sent: 0,
-        failed: 0,
         skipped: 0,
-        activeFormUrls: [],
-        forms: activeForms,
-        reason: "no_active_result_forms"
+        results: []
       });
     }
 
-    const regSnap = await db
+    const registrationsSnap = await db
       .collection("result_registrations")
-      .limit(limit)
+      .where("targetYear", "==", targetYear)
+      .limit(BATCH_SIZE)
       .get();
 
+    let processed = 0;
     let sent = 0;
-    let failed = 0;
     let skipped = 0;
     const results = [];
 
-    for (const doc of regSnap.docs) {
-      const reg = doc.data();
+    for (const doc of registrationsSnap.docs) {
+      const reg = doc.data() || {};
+      processed += 1;
 
-      if (!shouldSendToRegistration(reg, activeFormUrls)) {
+      const formUrl = reg.formUrl || "";
+      const mobile = normalizeMobile(reg.mobile || "");
+
+      if (!activeFormUrls.includes(formUrl)) {
         skipped += 1;
+        results.push({
+          registrationId: doc.id,
+          rollNo: reg.rollNo,
+          yearPart: reg.yearPart,
+          skipped: true,
+          reason: "form_not_active"
+        });
+        continue;
+      }
+
+      if (!mobile) {
+        skipped += 1;
+        results.push({
+          registrationId: doc.id,
+          rollNo: reg.rollNo,
+          yearPart: reg.yearPart,
+          skipped: true,
+          reason: "mobile_missing"
+        });
+        continue;
+      }
+
+      if (!isVerifiedWhatsAppNumber(mobile)) {
+        skipped += 1;
+
+        await doc.ref.set(
+          {
+            registeredUpdateWhatsAppSkipped: true,
+            registeredUpdateWhatsAppSkipReason:
+              "WhatsApp number verified alert list me nahi hai.",
+            mobileVerifiedForWhatsApp: false,
+            updatedAt: FieldValue.serverTimestamp()
+          },
+          {
+            merge: true
+          }
+        );
+
+        results.push({
+          registrationId: doc.id,
+          rollNo: reg.rollNo,
+          yearPart: reg.yearPart,
+          mobile,
+          skipped: true,
+          reason: "mobile_not_verified_for_whatsapp"
+        });
         continue;
       }
 
       const notificationId = makeNotificationId({
         rollNo: reg.rollNo,
         yearPart: reg.yearPart,
-        formUrl: reg.formUrl
+        resultType: reg.resultType || "MAIN",
+        targetYear,
+        formUrl
       });
 
-      const notifyRef = db
+      const notificationRef = db
         .collection("registered_result_update_notifications")
         .doc(notificationId);
 
-      const notifySnap = await notifyRef.get();
+      const notificationSnap = await notificationRef.get();
 
-      if (!force && notifySnap.exists && notifySnap.data()?.sent) {
+      if (notificationSnap.exists && !force) {
         skipped += 1;
-
         results.push({
           registrationId: doc.id,
+          notificationId,
           rollNo: reg.rollNo,
           yearPart: reg.yearPart,
-          status: "already_sent"
+          mobile,
+          skipped: true,
+          reason: "already_sent"
         });
-
         continue;
       }
 
-      const title = `${reg.yearPart || "PDUSU Result"} ${
-        process.env.TARGET_RESULT_YEAR || "2025-26"
-      }`;
+      const title = `${reg.yearPart || "PDUSU Result"} ${targetYear}`.trim();
 
       if (dryRun) {
         skipped += 1;
-
         results.push({
           registrationId: doc.id,
+          notificationId,
           rollNo: reg.rollNo,
           yearPart: reg.yearPart,
-          mobile: reg.mobile,
-          status: "dry_run",
-          title,
-          resultLink: reg.formUrl
+          mobile,
+          dryRun: true,
+          wouldSend: true
         });
-
         continue;
       }
 
       try {
-        const whatsapp = await sendTemplateToUser({
-          to: reg.mobile,
+        const sendResult = await sendRegisteredUpdateTemplate({
+          to: mobile,
           title,
-          resultLink: reg.formUrl,
-          mainPortal: OFFICIAL_MAIN_PORTAL
+          resultLink: formUrl,
+          mainPortal:
+            process.env.MAIN_EXAM_PORTAL ||
+            OFFICIAL_MAIN_PORTAL ||
+            "https://shekhauniexam.in/"
         });
 
-        await notifyRef.set(
+        await notificationRef.set(
           {
-            type: "registered_result_update",
+            notificationId,
             registrationId: doc.id,
             rollNo: reg.rollNo || "",
-            mobile: reg.mobile || "",
             yearPart: reg.yearPart || "",
-            formUrl: reg.formUrl || "",
+            resultType: reg.resultType || "MAIN",
+            targetYear,
+            mobile,
+            formUrl,
             title,
-            sent: true,
-            whatsapp,
+            sendResult,
             sentAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp()
           },
@@ -279,9 +354,11 @@ export default async function handler(req, res) {
 
         await doc.ref.set(
           {
-            registeredResultUpdateSent: true,
-            registeredResultUpdateSentAt: FieldValue.serverTimestamp(),
-            registeredResultUpdateWhatsApp: whatsapp,
+            registeredUpdateWhatsAppSent: true,
+            registeredUpdateWhatsAppSentAt: FieldValue.serverTimestamp(),
+            registeredUpdateWhatsAppSkipped: false,
+            registeredUpdateWhatsAppSkipReason: "",
+            mobileVerifiedForWhatsApp: true,
             updatedAt: FieldValue.serverTimestamp()
           },
           {
@@ -293,23 +370,21 @@ export default async function handler(req, res) {
 
         results.push({
           registrationId: doc.id,
+          notificationId,
           rollNo: reg.rollNo,
           yearPart: reg.yearPart,
-          mobile: normalizeWhatsAppNumber(reg.mobile),
-          status: "sent"
+          mobile,
+          sent: true,
+          method: sendResult.method
         });
       } catch (err) {
-        await notifyRef.set(
+        skipped += 1;
+
+        await doc.ref.set(
           {
-            type: "registered_result_update",
-            registrationId: doc.id,
-            rollNo: reg.rollNo || "",
-            mobile: reg.mobile || "",
-            yearPart: reg.yearPart || "",
-            formUrl: reg.formUrl || "",
-            title,
-            sent: false,
-            error: err.message || "send_failed",
+            registeredUpdateWhatsAppSent: false,
+            registeredUpdateWhatsAppLastError: err.message || "send failed",
+            mobileVerifiedForWhatsApp: true,
             updatedAt: FieldValue.serverTimestamp()
           },
           {
@@ -317,47 +392,31 @@ export default async function handler(req, res) {
           }
         );
 
-        failed += 1;
-
         results.push({
           registrationId: doc.id,
+          notificationId,
           rollNo: reg.rollNo,
           yearPart: reg.yearPart,
-          mobile: normalizeWhatsAppNumber(reg.mobile),
-          status: "failed",
-          error: err.message
+          mobile,
+          sent: false,
+          error: err.message || "send failed"
         });
       }
     }
 
-    await logEvent(
-      "registered_result_update_whatsapp",
-      "info",
-      "Registered result update WhatsApp completed",
-      {
-        sent,
-        failed,
-        skipped,
-        activeFormUrls
-      }
-    );
-
     return res.status(200).json({
       success: true,
-      mode: "notify_registered_result_update",
-      template:
-        process.env.WHATSAPP_REGISTERED_UPDATE_TEMPLATE_NAME ||
-        "pdusu_result_update_v2",
-      language:
-        process.env.WHATSAPP_REGISTERED_UPDATE_TEMPLATE_LANG || "en_US",
+      dryRun,
+      force,
+      targetYear,
       activeFormUrls,
-      forms: activeForms,
+      forms,
+      processed,
       sent,
-      failed,
       skipped,
       results
     });
   } catch (err) {
     return safeJsonError(res, err);
   }
-      }
+}
