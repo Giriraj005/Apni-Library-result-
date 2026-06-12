@@ -6,37 +6,37 @@ const DEFAULT_GROUPS = [
   {
     id: "pg_nep",
     label: "PG / Semester / NEP",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   },
   {
     id: "ug_nep",
     label: "UG NEP Semester",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   },
   {
     id: "pg_annual",
     label: "PG Annual / Final / Previous",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   },
   {
     id: "ug_annual",
     label: "UG Annual / Old Scheme",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   },
   {
     id: "bed_med",
     label: "B.Ed / M.Ed / Integrated",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   },
   {
     id: "credit_other",
     label: "Credit / Other Results",
-    subtitle: "Select the result category that matches your course.",
+    subtitle: "BA, BSc, BCom, BBA, BCA Part results",
     options: []
   }
 ];
@@ -168,21 +168,21 @@ function FieldIcon({ name }) {
 
 function StepCard({ number, icon, title, subtitle, showConnector }) {
   return (
-    <div className="relative rounded-[1.35rem] border border-orange-100 bg-white/95 p-4 text-center shadow-[0_16px_36px_rgba(15,23,42,0.055)]">
+    <div className="relative rounded-[1.45rem] border border-orange-100 bg-white/95 p-5 text-center shadow-[0_18px_42px_rgba(15,23,42,0.055)]">
       {showConnector ? (
-        <div className="absolute -right-5 top-1/2 hidden h-px w-10 border-t border-dashed border-orange-200 md:block" />
+        <div className="absolute -right-6 top-1/2 hidden h-px w-12 border-t border-dashed border-orange-200 md:block" />
       ) : null}
 
-      <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-xs font-black text-white shadow-[0_12px_24px_rgba(249,115,22,0.30)]">
+      <div className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-sm font-black text-white shadow-[0_12px_24px_rgba(249,115,22,0.30)]">
         {number}
       </div>
 
-      <div className="mx-auto mt-4 grid h-12 w-12 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
-        <Icon name={icon} className="h-6 w-6" />
+      <div className="mx-auto mt-5 grid h-14 w-14 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
+        <Icon name={icon} className="h-7 w-7" />
       </div>
 
-      <h3 className="mt-3 text-base font-black text-[#07122f]">{title}</h3>
-      <p className="mt-1.5 text-xs font-medium leading-5 text-slate-500 sm:text-sm">
+      <h3 className="mt-4 text-lg font-black text-[#07122f]">{title}</h3>
+      <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
         {subtitle}
       </p>
     </div>
@@ -393,9 +393,9 @@ export default function ResultAlertPage() {
         <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-amber-200/25 blur-3xl" />
       </div>
 
-      <section className="mx-auto max-w-[1360px]">
+      <section className="mx-auto max-w-[1420px]">
         <div className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/92 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5 lg:p-7">
-          <div className="grid gap-6 lg:grid-cols-[56fr_44fr] lg:items-start">
+          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
             <section className="relative overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8 xl:p-10">
               <div className="pointer-events-none absolute right-6 top-8 hidden h-28 w-28 rounded-full bg-orange-100/70 blur-3xl md:block" />
               <div className="pointer-events-none absolute bottom-12 left-8 hidden h-32 w-32 rounded-full bg-amber-100/70 blur-3xl md:block" />
@@ -408,7 +408,7 @@ export default function ResultAlertPage() {
                   RESULT ALERT
                 </div>
 
-                <div className="pointer-events-none absolute right-2 top-16 hidden xl:block">
+                <div className="pointer-events-none absolute right-5 top-14 hidden xl:block">
                   <div className="relative h-48 w-48">
                     <div className="absolute right-3 top-0 rotate-6 rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_22px_45px_rgba(15,23,42,0.10)]">
                       <div className="mb-3 h-3 w-20 rounded-full bg-orange-100" />
@@ -425,7 +425,7 @@ export default function ResultAlertPage() {
                 </div>
 
                 <div className="mt-7 pr-0 xl:pr-44">
-                  <h1 className="max-w-[720px] text-[2.55rem] font-black leading-[1.05] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[54px] xl:text-[58px]">
+                  <h1 className="max-w-[720px] text-[2.35rem] font-black leading-[1.05] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[54px] xl:text-[58px]">
                     <span className="block whitespace-nowrap">
                       Result alert ke liye
                     </span>
@@ -834,4 +834,4 @@ export default function ResultAlertPage() {
       </section>
     </main>
   );
-    }
+      }
