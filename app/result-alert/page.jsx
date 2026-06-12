@@ -168,21 +168,21 @@ function FieldIcon({ name }) {
 
 function StepCard({ number, icon, title, subtitle, showConnector }) {
   return (
-    <div className="relative rounded-[1.45rem] border border-orange-100 bg-white/95 p-5 text-center shadow-[0_18px_42px_rgba(15,23,42,0.06)]">
+    <div className="relative rounded-[1.35rem] border border-orange-100 bg-white/95 p-4 text-center shadow-[0_16px_36px_rgba(15,23,42,0.055)]">
       {showConnector ? (
         <div className="absolute -right-5 top-1/2 hidden h-px w-10 border-t border-dashed border-orange-200 md:block" />
       ) : null}
 
-      <div className="mx-auto -mt-1 grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-sm font-black text-white shadow-[0_12px_26px_rgba(249,115,22,0.32)]">
+      <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-xs font-black text-white shadow-[0_12px_24px_rgba(249,115,22,0.30)]">
         {number}
       </div>
 
-      <div className="mx-auto mt-5 grid h-14 w-14 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
-        <Icon name={icon} className="h-7 w-7" />
+      <div className="mx-auto mt-4 grid h-12 w-12 place-items-center rounded-2xl border border-orange-100 bg-orange-50 text-orange-600">
+        <Icon name={icon} className="h-6 w-6" />
       </div>
 
-      <h3 className="mt-4 text-lg font-black text-[#07122f]">{title}</h3>
-      <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
+      <h3 className="mt-3 text-base font-black text-[#07122f]">{title}</h3>
+      <p className="mt-1.5 text-xs font-medium leading-5 text-slate-500 sm:text-sm">
         {subtitle}
       </p>
     </div>
@@ -393,10 +393,10 @@ export default function ResultAlertPage() {
         <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-amber-200/25 blur-3xl" />
       </div>
 
-      <section className="mx-auto max-w-[1200px]">
+      <section className="mx-auto max-w-[1360px]">
         <div className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/92 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5 lg:p-7">
-          <div className="grid gap-6 lg:grid-cols-[52fr_48fr] lg:items-stretch">
-            <section className="relative rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8">
+          <div className="grid gap-6 lg:grid-cols-[56fr_44fr] lg:items-start">
+            <section className="relative rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8 xl:p-10">
               <div className="pointer-events-none absolute right-6 top-8 hidden h-28 w-28 rounded-full bg-orange-100/70 blur-3xl md:block" />
               <div className="pointer-events-none absolute bottom-12 left-8 hidden h-32 w-32 rounded-full bg-amber-100/70 blur-3xl md:block" />
 
@@ -408,17 +408,20 @@ export default function ResultAlertPage() {
                   RESULT ALERT
                 </div>
 
-                <div className="mt-7 grid gap-6 xl:grid-cols-[1fr_150px]">
+                <div className="mt-7 grid gap-6 xl:grid-cols-[1fr_170px]">
                   <div>
-                    <h1 className="max-w-2xl text-[2.55rem] font-black leading-[1.08] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[3.55rem] xl:text-[4rem]">
-                      Result alert ke liye roll number{" "}
-                      <span className="relative inline-block text-orange-600">
-                        register karo
-                        <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
+                    <h1 className="max-w-[820px] text-[2.7rem] font-black leading-[1.08] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[3.85rem] xl:text-[4.4rem]">
+                      <span className="block">Result alert ke liye</span>
+                      <span className="block">
+                        roll number{" "}
+                        <span className="relative inline-block whitespace-nowrap text-orange-600">
+                          register karo
+                          <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
+                        </span>
                       </span>
                     </h1>
 
-                    <p className="mt-6 max-w-xl text-base font-medium leading-8 text-slate-600 sm:text-lg">
+                    <p className="mt-6 max-w-[700px] text-base font-medium leading-8 text-slate-600 sm:text-lg">
                       Register once to receive timely result updates and track
                       your status with ease. Stay informed with a simple and
                       secure alert experience.
@@ -464,7 +467,7 @@ export default function ResultAlertPage() {
                 </div>
 
                 <div className="mt-6 overflow-hidden rounded-[1.65rem] border border-orange-100 bg-gradient-to-br from-white via-[#fff7ed] to-[#ffe4c7] p-5 shadow-[0_18px_45px_rgba(249,115,22,0.10)] sm:p-6">
-                  <div className="grid gap-5 md:grid-cols-[1fr_210px] md:items-center">
+                  <div className="grid gap-5 md:grid-cols-[1fr_245px] md:items-center">
                     <div>
                       <h2 className="text-2xl font-black leading-tight tracking-tight text-[#07122f] sm:text-3xl">
                         Smart Result Alerts,
@@ -511,31 +514,31 @@ export default function ResultAlertPage() {
                       </div>
                     </div>
 
-                    <div className="relative mx-auto hidden h-64 w-52 md:block">
-                      <div className="absolute right-6 top-0 rotate-6 rounded-[1.8rem] bg-gradient-to-br from-[#071a43] to-[#123c86] p-3 shadow-[0_25px_45px_rgba(15,23,42,0.26)]">
-                        <div className="h-56 w-32 rounded-[1.35rem] border border-white/20 bg-[#071a43] p-3">
-                          <div className="mx-auto mb-5 h-1.5 w-9 rounded-full bg-white/35" />
-                          <div className="grid place-items-center pt-3 text-center">
-                            <div className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-orange-400 text-white shadow-lg">
-                              <Icon name="bell" className="h-7 w-7" />
+                    <div className="relative mx-auto hidden h-56 w-56 md:block">
+                      <div className="absolute right-8 top-0 rotate-6 rounded-[1.8rem] bg-gradient-to-br from-[#071a43] to-[#123c86] p-3 shadow-[0_25px_45px_rgba(15,23,42,0.26)]">
+                        <div className="h-48 w-28 rounded-[1.35rem] border border-white/20 bg-[#071a43] p-3">
+                          <div className="mx-auto mb-4 h-1.5 w-8 rounded-full bg-white/35" />
+                          <div className="grid place-items-center pt-2 text-center">
+                            <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-orange-400 text-white shadow-lg">
+                              <Icon name="bell" className="h-6 w-6" />
                             </div>
-                            <div className="text-base font-black leading-tight text-white">
+                            <div className="text-sm font-black leading-tight text-white">
                               Result Update
                               <br />
                               Available
                             </div>
-                            <div className="mt-4 rounded-full bg-white px-3 py-2 text-[11px] font-black text-orange-600">
+                            <div className="mt-4 rounded-full bg-white px-3 py-2 text-[10px] font-black text-orange-600">
                               View Result
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      <div className="absolute bottom-2 left-3 grid h-16 w-16 place-items-center rounded-3xl bg-[#10234c] text-white shadow-xl">
+                      <div className="absolute bottom-4 left-4 grid h-16 w-16 place-items-center rounded-3xl bg-[#10234c] text-white shadow-xl">
                         <Icon name="check" className="h-8 w-8" />
                       </div>
 
-                      <div className="absolute right-0 top-12 text-orange-400">
+                      <div className="absolute right-1 top-12 text-orange-400">
                         <Icon name="sparkles" className="h-8 w-8" />
                       </div>
                     </div>
@@ -555,12 +558,12 @@ export default function ResultAlertPage() {
               </div>
             </section>
 
-            <section>
+            <section className="lg:self-start">
               <form
                 onSubmit={handleSubmit}
-                className="h-full rounded-[1.7rem] bg-gradient-to-br from-orange-100 via-white to-blue-100 p-[2px] shadow-[0_28px_75px_rgba(15,23,42,0.12)]"
+                className="rounded-[1.7rem] bg-gradient-to-br from-orange-100 via-white to-blue-100 p-[2px] shadow-[0_28px_75px_rgba(15,23,42,0.12)]"
               >
-                <div className="relative h-full rounded-[1.6rem] bg-white/95 backdrop-blur">
+                <div className="relative rounded-[1.6rem] bg-white/95 backdrop-blur">
                   <div className="overflow-hidden rounded-t-[1.6rem] bg-gradient-to-br from-orange-100 via-white to-blue-100 px-5 py-6 sm:px-7 sm:py-7">
                     <div className="pointer-events-none absolute right-7 top-7 text-orange-300">
                       <Icon name="sparkles" className="h-7 w-7" />
@@ -648,7 +651,7 @@ export default function ResultAlertPage() {
                           </p>
                         </div>
 
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="flex flex-wrap gap-2.5">
                           {groups.map((group) => {
                             const isActive = activeGroup === group.id;
                             const count = group.options?.length || 0;
@@ -663,19 +666,17 @@ export default function ResultAlertPage() {
                                   setSelectedValue("");
                                 }}
                                 className={cls(
-                                  "flex min-h-[3.25rem] items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-black transition",
+                                  "inline-flex min-h-11 items-center gap-2 rounded-full border px-3.5 py-2 text-left text-xs font-black transition sm:text-sm",
                                   isActive
-                                    ? "border-[#071a43] bg-[#071a43] text-white shadow-[0_10px_24px_rgba(7,26,67,0.20)]"
+                                    ? "border-[#071a43] bg-[#071a43] text-white shadow-[0_10px_22px_rgba(7,26,67,0.18)]"
                                     : "border-slate-200 bg-white text-[#1b2559] hover:border-orange-200 hover:bg-orange-50"
                                 )}
                               >
-                                <span className="min-w-0 leading-5">
-                                  {group.label}
-                                </span>
+                                <span>{group.label}</span>
 
                                 <span
                                   className={cls(
-                                    "shrink-0 rounded-full px-3 py-1 text-xs font-black",
+                                    "rounded-full px-2.5 py-1 text-[11px] font-black",
                                     isActive
                                       ? "bg-orange-500 text-white"
                                       : count
@@ -831,4 +832,4 @@ export default function ResultAlertPage() {
       </section>
     </main>
   );
-      }
+          }
