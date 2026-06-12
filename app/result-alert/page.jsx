@@ -396,7 +396,7 @@ export default function ResultAlertPage() {
       <section className="mx-auto max-w-[1360px]">
         <div className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/92 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5 lg:p-7">
           <div className="grid gap-6 lg:grid-cols-[56fr_44fr] lg:items-start">
-            <section className="relative rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8 xl:p-10">
+            <section className="relative overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-white via-[#fffaf4] to-white p-5 shadow-sm ring-1 ring-orange-100/70 sm:p-7 lg:p-8 xl:p-10">
               <div className="pointer-events-none absolute right-6 top-8 hidden h-28 w-28 rounded-full bg-orange-100/70 blur-3xl md:block" />
               <div className="pointer-events-none absolute bottom-12 left-8 hidden h-32 w-32 rounded-full bg-amber-100/70 blur-3xl md:block" />
 
@@ -408,28 +408,9 @@ export default function ResultAlertPage() {
                   RESULT ALERT
                 </div>
 
-                <div className="mt-7 grid gap-6 xl:grid-cols-[1fr_170px]">
-                  <div>
-                    <h1 className="max-w-[820px] text-[2.7rem] font-black leading-[1.08] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[3.85rem] xl:text-[4.4rem]">
-                      <span className="block">Result alert ke liye</span>
-                      <span className="block">
-                        roll number{" "}
-                        <span className="relative inline-block whitespace-nowrap text-orange-600">
-                          register karo
-                          <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
-                        </span>
-                      </span>
-                    </h1>
-
-                    <p className="mt-6 max-w-[700px] text-base font-medium leading-8 text-slate-600 sm:text-lg">
-                      Register once to receive timely result updates and track
-                      your status with ease. Stay informed with a simple and
-                      secure alert experience.
-                    </p>
-                  </div>
-
-                  <div className="relative hidden xl:block">
-                    <div className="absolute right-0 top-0 rotate-6 rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_22px_45px_rgba(15,23,42,0.10)]">
+                <div className="pointer-events-none absolute right-2 top-16 hidden xl:block">
+                  <div className="relative h-48 w-48">
+                    <div className="absolute right-3 top-0 rotate-6 rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_22px_45px_rgba(15,23,42,0.10)]">
                       <div className="mb-3 h-3 w-20 rounded-full bg-orange-100" />
                       <div className="mb-4 h-3 w-28 rounded-full bg-slate-100" />
                       <div className="grid h-28 w-28 place-items-center rounded-[1.4rem] bg-gradient-to-br from-orange-100 to-amber-50 text-orange-600">
@@ -437,10 +418,31 @@ export default function ResultAlertPage() {
                       </div>
                     </div>
 
-                    <div className="absolute -left-2 top-28 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-red-500 text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)]">
+                    <div className="absolute left-0 top-28 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-orange-400 to-red-500 text-white shadow-[0_18px_35px_rgba(249,115,22,0.30)]">
                       <Icon name="bell" className="h-8 w-8" />
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-7 pr-0 xl:pr-44">
+                  <h1 className="max-w-[720px] text-[2.55rem] font-black leading-[1.05] tracking-[-0.055em] text-[#07122f] sm:text-5xl lg:text-[54px] xl:text-[58px]">
+                    <span className="block whitespace-nowrap">
+                      Result alert ke liye
+                    </span>
+                    <span className="block whitespace-nowrap">
+                      roll number{" "}
+                      <span className="relative inline-block whitespace-nowrap text-orange-600">
+                        register karo
+                        <span className="absolute -bottom-1.5 left-0 h-2 w-full rounded-full bg-orange-200/90" />
+                      </span>
+                    </span>
+                  </h1>
+
+                  <p className="mt-6 max-w-[670px] text-base font-medium leading-8 text-slate-600 sm:text-lg">
+                    Register once to receive timely result updates and track
+                    your status with ease. Stay informed with a simple and
+                    secure alert experience.
+                  </p>
                 </div>
 
                 <div className="mt-8 grid gap-4 md:grid-cols-3">
