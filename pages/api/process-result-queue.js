@@ -7,46 +7,13 @@ import { logEvent } from "../../lib/logger";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
 const BATCH_SIZE = 3;
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 5; // ✅ FIX: 3 se badhake 5 kiya — zyada retry milega
 
 function escapeTelegram(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-function normalizeMobile(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-
-  if (!digits) return "";
-
-  if (digits.length === 10) {
-    return `91${digits}`;
-  }
-
-  return digits;
-}
-
-function getVerifiedWhatsAppNumbers() {
-  const raw = process.env.WHATSAPP_VERIFIED_NUMBERS || "";
-
-  return new Set(
-    raw
-      .split(",")
-      .map((item) => normalizeMobile(item))
-      .filter(Boolean)
-  );
-}
-
-function isVerifiedWhatsAppNumber(mobile) {
-  const normalized = normalizeMobile(mobile);
-
-  if (!normalized) return false;
-
-  const verifiedNumbers = getVerifiedWhatsAppNumbers();
-
-  return verifiedNumbers.has(normalized);
 }
 
 function getWorkerUrl() {
@@ -65,58 +32,6 @@ function getWorkerSecret() {
   }
 
   return process.env.WORKER_SECRET;
-}
-
-function isCleanNotFoundStatus({ status = "", reason = "", error = "" }) {
-  const workerStatus = String(status || "").toLowerCase();
-  const message = `${reason || ""} ${error || ""}`.toLowerCase();
-
-  const cleanStatuses = ["not_found", "form_returned"];
-
-  if (cleanStatuses.includes(workerStatus)) {
-    return true;
-  }
-
-  const cleanPhrases = [
-    "form returned",
-    "record not found",
-    "not found",
-    "no record",
-    "invalid roll",
-    "wrong roll",
-    "result not declared",
-    "result not found"
-  ];
-
-  return cleanPhrases.some((phrase) => message.includes(phrase));
-}
-
-function getFinalStatusForWorkerResult({ workerResult, attempts }) {
-  const status = workerResult?.resultStatus || "";
-  const reason = workerResult?.reason || "";
-  const error = workerResult?.error || "";
-
-  if (isCleanNotFoundStatus({ status, reason, error })) {
-    return "not_found";
-  }
-
-  return attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
-}
-
-function getFinalStatusForCaughtError({ err, attempts }) {
-  const message = String(err?.message || "");
-
-  if (
-    isCleanNotFoundStatus({
-      status: "",
-      reason: message,
-      error: message
-    })
-  ) {
-    return "not_found";
-  }
-
-  return attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 }
 
 function compactMarksSummary(text = "") {
@@ -272,6 +187,48 @@ async function getRegistration(item) {
   return snap.exists ? snap.data() : null;
 }
 
+// ✅ FIX: Purane registrations jo queue mein nahi hain unhe automatically add karo
+async function syncMissingQueueEntries() {
+  try {
+    const regSnap = await db
+      .collection("result_registrations")
+      .where("status", "in", ["waiting", "pending"])
+      .limit(20)
+      .get();
+
+    if (regSnap.empty) return 0;
+
+    let synced = 0;
+
+    for (const doc of regSnap.docs) {
+      const data = doc.data();
+      const queueRef = db.collection("result_queue").doc(doc.id);
+      const queueSnap = await queueRef.get();
+
+      if (!queueSnap.exists) {
+        await queueRef.set({
+          rollNo: data.rollNo,
+          yearPart: data.yearPart,
+          resultType: data.resultType || "MAIN",
+          formUrl: data.formUrl || getFormUrlForYearPart(data.yearPart),
+          formKey: data.formKey || "",
+          registrationId: doc.id,
+          status: "pending",
+          attempts: 0,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp()
+        });
+        synced++;
+      }
+    }
+
+    return synced;
+  } catch (err) {
+    await logEvent("queue", "warn", "syncMissingQueueEntries failed: " + err.message, {});
+    return 0;
+  }
+}
+
 export default async function handler(req, res) {
   try {
     requireCron(req);
@@ -290,6 +247,9 @@ export default async function handler(req, res) {
       });
     }
 
+    // ✅ FIX: Purane registrations jo queue mein miss hain unhe sync karo
+    const synced = await syncMissingQueueEntries();
+
     const queueSnap = await db
       .collection("result_queue")
       .where("status", "in", ["pending", "failed_retrying"])
@@ -302,7 +262,8 @@ export default async function handler(req, res) {
         success: true,
         processed: 0,
         found: 0,
-        failed: 0
+        failed: 0,
+        synced // kitne naye entries sync hue
       });
     }
 
@@ -323,9 +284,7 @@ export default async function handler(req, res) {
           attempts,
           updatedAt: FieldValue.serverTimestamp()
         },
-        {
-          merge: true
-        }
+        { merge: true }
       );
 
       try {
@@ -352,22 +311,15 @@ export default async function handler(req, res) {
           const outputSnap = await outputRef.get();
           const outputOld = outputSnap.exists ? outputSnap.data() : {};
 
-          const adminTelegramAlreadySent = Boolean(
-            outputOld.adminTelegramSent
-          );
+          const adminTelegramAlreadySent = Boolean(outputOld.adminTelegramSent);
 
+          // ✅ FIX: WhatsApp retry karo agar pehle fail hua tha
           const studentWhatsAppAlreadySent = Boolean(
-            outputOld.studentWhatsAppSent
+            outputOld.studentWhatsAppSent && outputOld.studentWhatsApp?.success
           );
 
           let adminTelegramResult = null;
           let studentWhatsApp = null;
-
-          const marksSummary =
-            workerResult.marksSummary || workerResult.textPreview || "";
-
-          const registrationMobile = normalizeMobile(registration?.mobile || "");
-          const whatsappVerified = isVerifiedWhatsAppNumber(registrationMobile);
 
           if (!adminTelegramAlreadySent) {
             adminTelegramResult = await sendTelegramMessage({
@@ -380,35 +332,39 @@ export default async function handler(req, res) {
                 yearPart: item.yearPart,
                 resultType: item.resultType || "MAIN",
                 officialUrl: formUrl,
-                marksSummary,
+                marksSummary:
+                  workerResult.marksSummary || workerResult.textPreview || "",
                 studentName: registration?.studentName || "",
                 mobile: registration?.mobile || ""
               })
             });
           }
 
-          if (
-            registrationMobile &&
-            whatsappVerified &&
-            !studentWhatsAppAlreadySent
-          ) {
-            studentWhatsApp = await sendWhatsAppStudentResultAuto({
-              to: registrationMobile,
-              rollNo: item.rollNo,
-              yearPart: item.yearPart,
-              resultSummary: makeWhatsAppShortSummary(marksSummary),
-              officialUrl: formUrl
-            });
+          // ✅ FIX: mobile check aur WhatsApp retry logic
+          const studentMobile = registration?.mobile || item.mobile || "";
+
+          if (studentMobile && !studentWhatsAppAlreadySent) {
+            try {
+              studentWhatsApp = await sendWhatsAppStudentResultAuto({
+                to: studentMobile,
+                rollNo: item.rollNo,
+                yearPart: item.yearPart,
+                resultSummary: makeWhatsAppShortSummary(
+                  workerResult.marksSummary || workerResult.textPreview || ""
+                ),
+                officialUrl: formUrl
+              });
+            } catch (waErr) {
+              // WhatsApp fail hone par poori queue processing nahi rukni chahiye
+              studentWhatsApp = {
+                success: false,
+                error: waErr.message || "WhatsApp send failed"
+              };
+              await logEvent("queue", "warn", "WhatsApp send failed for " + item.rollNo, {
+                error: waErr.message
+              });
+            }
           }
-
-          const studentWhatsAppSkipped =
-            Boolean(registrationMobile) &&
-            !whatsappVerified &&
-            !studentWhatsAppAlreadySent;
-
-          const studentWhatsAppSkipReason = studentWhatsAppSkipped
-            ? "WhatsApp number verified alert list me nahi hai."
-            : "";
 
           await outputRef.set(
             {
@@ -429,9 +385,6 @@ export default async function handler(req, res) {
                 outputOld.adminTelegramMessageId ||
                 null,
 
-              mobileVerifiedForWhatsApp: whatsappVerified,
-              whatsappDeliveryRule: "verified_numbers_only",
-
               studentWhatsAppSent:
                 studentWhatsApp?.success ||
                 outputOld.studentWhatsAppSent ||
@@ -445,15 +398,11 @@ export default async function handler(req, res) {
                 studentWhatsApp && !studentWhatsApp.success
                   ? studentWhatsApp.error
                   : outputOld.studentWhatsAppLastError || "",
-              studentWhatsAppSkipped,
-              studentWhatsAppSkipReason,
 
               fetchedAt: FieldValue.serverTimestamp(),
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           await doc.ref.set(
@@ -462,12 +411,9 @@ export default async function handler(req, res) {
               resultFound: true,
               resultId,
               workerResultStatus: workerResult.resultStatus || "",
-              workerReason: workerResult.reason || "",
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           if (item.registrationId) {
@@ -487,9 +433,6 @@ export default async function handler(req, res) {
                     outputOld.adminTelegramMessageId ||
                     null,
 
-                  mobileVerifiedForWhatsApp: whatsappVerified,
-                  whatsappDeliveryRule: "verified_numbers_only",
-
                   studentWhatsAppSent:
                     studentWhatsApp?.success ||
                     outputOld.studentWhatsAppSent ||
@@ -500,14 +443,10 @@ export default async function handler(req, res) {
                     studentWhatsApp && !studentWhatsApp.success
                       ? studentWhatsApp.error
                       : outputOld.studentWhatsAppLastError || "",
-                  studentWhatsAppSkipped,
-                  studentWhatsAppSkipReason,
 
                   updatedAt: FieldValue.serverTimestamp()
                 },
-                {
-                  merge: true
-                }
+                { merge: true }
               );
           }
 
@@ -518,37 +457,23 @@ export default async function handler(req, res) {
             rollNo: item.rollNo,
             yearPart: item.yearPart,
             status: "result_found",
-            adminTelegramSent: true,
-            mobileVerifiedForWhatsApp: whatsappVerified,
-            studentWhatsAppSent:
-              studentWhatsApp?.success ||
-              outputOld.studentWhatsAppSent ||
-              false,
-            studentWhatsAppMethod:
-              studentWhatsApp?.method ||
-              outputOld.studentWhatsApp?.method ||
-              "",
-            studentWhatsAppSkipped,
-            studentWhatsAppSkipReason,
+            adminTelegramSent: !adminTelegramAlreadySent,
+            studentWhatsAppSent: studentWhatsApp?.success || false,
+            studentWhatsAppMethod: studentWhatsApp?.method || "",
             studentWhatsAppError:
               studentWhatsApp && !studentWhatsApp.success
                 ? studentWhatsApp.error
                 : ""
           });
         } else {
-          const finalStatus = getFinalStatusForWorkerResult({
-            workerResult,
-            attempts
-          });
-
-          const cleanNotFound = finalStatus === "not_found";
+          const finalStatus =
+            attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
           await doc.ref.set(
             {
               status: finalStatus,
               resultFound: false,
               workerResultStatus: workerResult.resultStatus || "",
-              workerReason: workerResult.reason || "",
               lastError:
                 workerResult.reason ||
                 workerResult.error ||
@@ -556,9 +481,7 @@ export default async function handler(req, res) {
               lastTextPreview: workerResult.textPreview || "",
               updatedAt: FieldValue.serverTimestamp()
             },
-            {
-              merge: true
-            }
+            { merge: true }
           );
 
           if (item.registrationId) {
@@ -568,18 +491,9 @@ export default async function handler(req, res) {
               .set(
                 {
                   status: finalStatus,
-                  resultFound: false,
-                  workerResultStatus: workerResult.resultStatus || "",
-                  workerReason: workerResult.reason || "",
-                  lastError:
-                    workerResult.reason ||
-                    workerResult.error ||
-                    "Result not found",
                   updatedAt: FieldValue.serverTimestamp()
                 },
-                {
-                  merge: true
-                }
+                { merge: true }
               );
           }
 
@@ -590,18 +504,14 @@ export default async function handler(req, res) {
             rollNo: item.rollNo,
             yearPart: item.yearPart,
             status: finalStatus,
-            cleanNotFound,
-            workerResultStatus: workerResult.resultStatus || "",
             reason: workerResult.reason || workerResult.error || ""
           });
         }
       } catch (err) {
         failed += 1;
 
-        const finalStatus = getFinalStatusForCaughtError({
-          err,
-          attempts
-        });
+        const finalStatus =
+          attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
 
         await doc.ref.set(
           {
@@ -609,30 +519,11 @@ export default async function handler(req, res) {
             lastError: err.message,
             updatedAt: FieldValue.serverTimestamp()
           },
-          {
-            merge: true
-          }
+          { merge: true }
         );
 
-        if (item.registrationId) {
-          await db
-            .collection("result_registrations")
-            .doc(item.registrationId)
-            .set(
-              {
-                status: finalStatus,
-                lastError: err.message,
-                updatedAt: FieldValue.serverTimestamp()
-              },
-              {
-                merge: true
-              }
-            );
-        }
-
         await logEvent("queue", "error", err.message, {
-          queueId: doc.id,
-          finalStatus
+          queueId: doc.id
         });
 
         results.push({
@@ -649,6 +540,7 @@ export default async function handler(req, res) {
       processed,
       found,
       failed,
+      synced,
       results
     });
 
@@ -657,10 +549,11 @@ export default async function handler(req, res) {
       processed,
       found,
       failed,
+      synced,
       results
     });
   } catch (err) {
     await logEvent("queue", "error", err.message, {});
     return safeJsonError(res, err);
   }
-            }
+}
