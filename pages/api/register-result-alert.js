@@ -47,8 +47,16 @@ export default async function handler(req, res) {
     const rollNo = normalizeRollNo(body.rollNo);
     const mobile = normalizeMobile(body.mobile);
 
-    const consentTelegramGroup = Boolean(body.consentTelegramGroup);
-    const consentWhatsAppResult = Boolean(body.consentWhatsAppResult);
+    // ✅ FIX: Agar single consent checkbox hai to dono auto-true
+    // Frontend se koi bhi ek consent aaye — dono true maano
+    const anyConsent = Boolean(
+      body.consentTelegramGroup ||
+      body.consentWhatsAppResult ||
+      body.consent ||
+      body.agree
+    );
+    const consentTelegramGroup = anyConsent;
+    const consentWhatsAppResult = anyConsent;
 
     if (!studentName) {
       return res.status(400).json({
@@ -78,17 +86,11 @@ export default async function handler(req, res) {
       });
     }
 
+    // ✅ FIX: Sirf ek combined consent check
     if (!consentTelegramGroup) {
       return res.status(400).json({
         success: false,
-        error: "Telegram result alert consent is required"
-      });
-    }
-
-    if (!consentWhatsAppResult) {
-      return res.status(400).json({
-        success: false,
-        error: "WhatsApp result alert consent is required"
+        error: "Please agree to receive result alerts"
       });
     }
 
