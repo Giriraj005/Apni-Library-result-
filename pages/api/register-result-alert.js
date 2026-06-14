@@ -47,11 +47,11 @@ export default async function handler(req, res) {
     const rollNo = normalizeRollNo(body.rollNo);
     const mobile = normalizeMobile(body.mobile);
 
-    // ✅ FIX: Agar single consent checkbox hai to dono auto-true
-    // Frontend se koi bhi ek consent aaye — dono true maano
+    // ✅ FIX: Frontend 'consentAdminPreview' bhejta hai — sab accept karo
     const anyConsent = Boolean(
       body.consentTelegramGroup ||
       body.consentWhatsAppResult ||
+      body.consentAdminPreview ||
       body.consent ||
       body.agree
     );
