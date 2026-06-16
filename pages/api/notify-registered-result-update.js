@@ -2,9 +2,9 @@ import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
 import {
   OFFICIAL_MAIN_PORTAL,
-  RESULT_FORM_CANDIDATES,
-  validateResultLink
+  RESULT_FORM_CANDIDATES
 } from "../../lib/resultCourseCatalog";
+import { validateResultLink } from "../../lib/resultLinkValidator";
 
 const DEFAULT_TEMPLATE_NAME = "pdusu_result_update_v2";
 const DEFAULT_TEMPLATE_LANG = "en_US";
