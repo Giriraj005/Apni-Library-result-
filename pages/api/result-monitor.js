@@ -77,13 +77,15 @@ function makeDirectFormAlertId(targetYear, form) {
 async function sendDirectFormAlert({
   targetYear,
   form,
-  genericPortalAlertAlreadySent
+  genericPortalAlertAlreadySent,
+  force
 }) {
   const alertId = makeDirectFormAlertId(targetYear, form);
   const alertRef = db.collection("result_seen_events").doc(alertId);
   const alertSnap = await alertRef.get();
 
-  if (alertSnap.exists && alertSnap.data()?.sent) {
+  // force=1 ho toh pehla sent check ignore karo
+  if (!force && alertSnap.exists && alertSnap.data()?.sent) {
     return {
       type: form.type,
       label: form.label,
@@ -96,7 +98,7 @@ async function sendDirectFormAlert({
     };
   }
 
-  if (form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
+  if (!force && form.type === "PG_NEP" && genericPortalAlertAlreadySent) {
     await alertRef.set(
       {
         type: "result_direct_form_alert",
@@ -197,6 +199,7 @@ export default async function handler(req, res) {
     requireCron(req);
 
     const targetYear = process.env.TARGET_RESULT_YEAR || "2025-26";
+    const force = req.query.force === "1";
 
     const sourceSnap = await db.collection("result_sources").doc("pdusu_main").get();
 
@@ -212,7 +215,7 @@ export default async function handler(req, res) {
       .get();
 
     const genericPortalAlertAlreadySent =
-      portalAlertSnap.exists && portalAlertSnap.data()?.sent;
+      !force && portalAlertSnap.exists && portalAlertSnap.data()?.sent;
 
     const directFormValidations = await validateDirectResultForms();
     const validDirectForms = directFormValidations.filter((item) => item.valid);
@@ -223,7 +226,8 @@ export default async function handler(req, res) {
       const result = await sendDirectFormAlert({
         targetYear,
         form,
-        genericPortalAlertAlreadySent
+        genericPortalAlertAlreadySent,
+        force
       });
 
       directFormAlertResults.push(result);
@@ -275,18 +279,21 @@ export default async function handler(req, res) {
     let whatsapp = null;
     let telegramSent = false;
 
-    if (!already.exists) {
-      await eventRef.set({
-        type: strongSignals.length
-          ? "result_listing_signal"
-          : "result_listing_hash",
-        hash: pageHash,
-        url,
-        strongSignals,
-        directFormValidations,
-        directFormAlertResults,
-        createdAt: FieldValue.serverTimestamp()
-      });
+    // force=1 ho ya pehle nahi dekha ho — dono case mein alert bhejo
+    if (force || !already.exists) {
+      if (!already.exists) {
+        await eventRef.set({
+          type: strongSignals.length
+            ? "result_listing_signal"
+            : "result_listing_hash",
+          hash: pageHash,
+          url,
+          strongSignals,
+          directFormValidations,
+          directFormAlertResults,
+          createdAt: FieldValue.serverTimestamp()
+        });
+      }
 
       await logEvent(
         "result_monitor",
@@ -343,6 +350,7 @@ export default async function handler(req, res) {
       url,
       hash: pageHash,
       changed: !already.exists,
+      force,
       strongSignals,
       directFormValidations,
       directFormAlertResults,
