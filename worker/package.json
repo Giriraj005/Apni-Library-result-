@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.21.2",
-    "playwright": "^1.55.0"
+  },"dependencies": {
+  "express": "^4.21.2",
+  "playwright": "^1.63.0",
+  "tesseract.js": "^5.1.1"
   }
 }
