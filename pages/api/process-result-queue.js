@@ -146,7 +146,13 @@ function buildAdminMarksMessage({
     .join("\n");
 }
 
-async function fetchResultFromWorker({ rollNo, yearPart, resultType, formUrl }) {
+async function fetchResultFromWorker({
+  rollNo,
+  yearPart,
+  resultType,
+  formUrl,
+  dob
+}) {
   const workerUrl = getWorkerUrl();
   const secret = getWorkerSecret();
 
@@ -161,7 +167,8 @@ async function fetchResultFromWorker({ rollNo, yearPart, resultType, formUrl }) 
       rollNo,
       yearPart,
       resultType,
-      formUrl
+      formUrl,
+      dob
     })
   });
 
@@ -212,6 +219,7 @@ async function syncMissingQueueEntries() {
           resultType: data.resultType || "MAIN",
           formUrl: data.formUrl || getFormUrlForYearPart(data.yearPart),
           formKey: data.formKey || "",
+          dateOfBirth: data.dateOfBirth || "",
           registrationId: doc.id,
           status: "pending",
           attempts: 0,
@@ -291,12 +299,14 @@ export default async function handler(req, res) {
         const registration = await getRegistration(item);
 
         const formUrl = item.formUrl || getFormUrlForYearPart(item.yearPart);
+        const dob = registration?.dateOfBirth || item.dateOfBirth || "";
 
         const workerResult = await fetchResultFromWorker({
           rollNo: item.rollNo,
           yearPart: item.yearPart,
           resultType: item.resultType || "MAIN",
-          formUrl
+          formUrl,
+          dob
         });
 
         if (workerResult.resultFound) {
