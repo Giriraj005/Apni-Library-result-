@@ -1,13 +1,13 @@
 {
   "name": "apni-library-worker",
   "main": "src/index.js",
-  // Set this to today's date when you first deploy
+  
   "compatibility_date": "2026-09-27",
 
   "containers": [
     {
       "class_name": "ResultWorker",
-      // Points at your existing Dockerfile - keep it in this same folder
+      
       "image": "./Dockerfile",
       "max_instances": 2
     }
