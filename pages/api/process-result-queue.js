@@ -1,3 +1,4 @@
+
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
 import { makeResultEventKey } from "../../lib/resultQueue";
@@ -7,7 +8,7 @@ import { logEvent } from "../../lib/logger";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
 const BATCH_SIZE = 3;
-const MAX_ATTEMPTS = 5; // ✅ FIX: 3 se badhake 5 kiya — zyada retry milega
+const MAX_ATTEMPTS = 5;
 
 function escapeTelegram(value) {
   return String(value || "")
@@ -17,21 +18,47 @@ function escapeTelegram(value) {
 }
 
 function getWorkerUrl() {
-  const url = process.env.WORKER_URL;
+  const value = process.env.WORKER_URL;
 
-  if (!url) {
+  if (!value) {
     throw new Error("WORKER_URL is missing");
   }
 
-  return url.replace(/\/+$/, "");
+  let parsed;
+
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("WORKER_URL is not a valid URL");
+  }
+
+  if (!["https:", "http:"].includes(parsed.protocol)) {
+    throw new Error("WORKER_URL must use HTTP or HTTPS");
+  }
+
+  // Remove trailing slashes, but preserve any configured path.
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function getWorkerSecret() {
-  if (!process.env.WORKER_SECRET) {
+  const secret = process.env.WORKER_SECRET;
+
+  if (!secret) {
     throw new Error("WORKER_SECRET is missing");
   }
 
-  return process.env.WORKER_SECRET;
+  return secret;
+}
+
+function getWorkerEndpoint() {
+  const base = getWorkerUrl();
+
+  // Avoid appending /fetch-result twice.
+  if (/\/fetch-result$/i.test(base)) {
+    return base;
+  }
+
+  return `${base}/fetch-result`;
 }
 
 function compactMarksSummary(text = "") {
@@ -40,7 +67,6 @@ function compactMarksSummary(text = "") {
   if (!raw) return "";
 
   const firstBlock = raw.split(" DISCLAIMER ")[0];
-
   const parts = [];
 
   const identityMatch = firstBlock.match(
@@ -63,10 +89,10 @@ function compactMarksSummary(text = "") {
   const subjectRegex =
     /((DSE|MAJOR|MINOR|VAC|SEC|AEC)\s+[A-Z0-9]+\s+[\s\S]*?\s+\d+\s+\d+\s+[-\d]+\s+[-\d]+\s+-?\s+\d+\s+\d+\s+\d+\s+[A-Z+]+\s+\d+\s+\d+)/gi;
 
-  let sm;
+  let match;
 
-  while ((sm = subjectRegex.exec(firstBlock))) {
-    subjectLines.push(sm[1].trim().replace(/\s+/g, " "));
+  while ((match = subjectRegex.exec(firstBlock))) {
+    subjectLines.push(match[1].trim().replace(/\s+/g, " "));
     if (subjectLines.length >= 10) break;
   }
 
@@ -153,31 +179,67 @@ async function fetchResultFromWorker({
   formUrl,
   dob
 }) {
-  const workerUrl = getWorkerUrl();
+  const endpoint = getWorkerEndpoint();
   const secret = getWorkerSecret();
 
-  const response = await fetch(`${workerUrl}/fetch-result`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-worker-secret": secret
-    },
-    body: JSON.stringify({
-      secret,
-      rollNo,
-      yearPart,
-      resultType,
-      formUrl,
-      dob
-    })
-  });
+  let response;
 
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok || !data) {
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-worker-secret": secret
+      },
+      body: JSON.stringify({
+        secret,
+        rollNo,
+        yearPart,
+        resultType,
+        formUrl,
+        dob
+      })
+    });
+  } catch (err) {
     throw new Error(
-      data?.error || `Worker failed with status ${response.status}`
+      `Worker network error: ${err.message || "Request failed"}`
     );
+  }
+
+  const responseText = await response.text();
+
+  let data = null;
+
+  try {
+    data = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    let safeEndpoint = "Worker endpoint";
+
+    try {
+      const parsed = new URL(endpoint);
+      safeEndpoint = `${parsed.origin}${parsed.pathname}`;
+    } catch {}
+
+    const details = String(
+      data?.error ||
+      data?.message ||
+      responseText ||
+      "No response body"
+    )
+      .replace(/\s+/g, " ")
+      .slice(0, 500);
+
+    throw new Error(
+      `Worker HTTP ${response.status} at ${safeEndpoint}: ${details}`
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("Worker returned invalid JSON");
   }
 
   return data;
@@ -194,7 +256,6 @@ async function getRegistration(item) {
   return snap.exists ? snap.data() : null;
 }
 
-// ✅ FIX: Purane registrations jo queue mein nahi hain unhe automatically add karo
 async function syncMissingQueueEntries() {
   try {
     const regSnap = await db
@@ -226,13 +287,20 @@ async function syncMissingQueueEntries() {
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp()
         });
+
         synced++;
       }
     }
 
     return synced;
   } catch (err) {
-    await logEvent("queue", "warn", "syncMissingQueueEntries failed: " + err.message, {});
+    await logEvent(
+      "queue",
+      "warn",
+      "syncMissingQueueEntries failed: " + err.message,
+      {}
+    );
+
     return 0;
   }
 }
@@ -255,7 +323,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // ✅ FIX: Purane registrations jo queue mein miss hain unhe sync karo
     const synced = await syncMissingQueueEntries();
 
     const queueSnap = await db
@@ -271,7 +338,7 @@ export default async function handler(req, res) {
         processed: 0,
         found: 0,
         failed: 0,
-        synced // kitne naye entries sync hue
+        synced
       });
     }
 
@@ -282,7 +349,7 @@ export default async function handler(req, res) {
 
     for (const doc of queueSnap.docs) {
       const item = doc.data();
-      processed += 1;
+      processed++;
 
       const attempts = (item.attempts || 0) + 1;
 
@@ -298,8 +365,11 @@ export default async function handler(req, res) {
       try {
         const registration = await getRegistration(item);
 
-        const formUrl = item.formUrl || getFormUrlForYearPart(item.yearPart);
-        const dob = registration?.dateOfBirth || item.dateOfBirth || "";
+        const formUrl =
+          item.formUrl || getFormUrlForYearPart(item.yearPart);
+
+        const dob =
+          registration?.dateOfBirth || item.dateOfBirth || "";
 
         const workerResult = await fetchResultFromWorker({
           rollNo: item.rollNo,
@@ -313,7 +383,7 @@ export default async function handler(req, res) {
           const resultId = makeResultEventKey({
             rollNo: item.rollNo,
             yearPart: item.yearPart,
-            resultType: item.resultType,
+            resultType: item.resultType || "MAIN",
             targetYear: process.env.TARGET_RESULT_YEAR
           });
 
@@ -321,11 +391,12 @@ export default async function handler(req, res) {
           const outputSnap = await outputRef.get();
           const outputOld = outputSnap.exists ? outputSnap.data() : {};
 
-          const adminTelegramAlreadySent = Boolean(outputOld.adminTelegramSent);
+          const adminTelegramAlreadySent =
+            Boolean(outputOld.adminTelegramSent);
 
-          // ✅ FIX: WhatsApp retry karo agar pehle fail hua tha
           const studentWhatsAppAlreadySent = Boolean(
-            outputOld.studentWhatsAppSent && outputOld.studentWhatsApp?.success
+            outputOld.studentWhatsAppSent &&
+            outputOld.studentWhatsApp?.success
           );
 
           let adminTelegramResult = null;
@@ -343,15 +414,17 @@ export default async function handler(req, res) {
                 resultType: item.resultType || "MAIN",
                 officialUrl: formUrl,
                 marksSummary:
-                  workerResult.marksSummary || workerResult.textPreview || "",
+                  workerResult.marksSummary ||
+                  workerResult.textPreview ||
+                  "",
                 studentName: registration?.studentName || "",
                 mobile: registration?.mobile || ""
               })
             });
           }
 
-          // ✅ FIX: mobile check aur WhatsApp retry logic
-          const studentMobile = registration?.mobile || item.mobile || "";
+          const studentMobile =
+            registration?.mobile || item.mobile || "";
 
           if (studentMobile && !studentWhatsAppAlreadySent) {
             try {
@@ -360,19 +433,24 @@ export default async function handler(req, res) {
                 rollNo: item.rollNo,
                 yearPart: item.yearPart,
                 resultSummary: makeWhatsAppShortSummary(
-                  workerResult.marksSummary || workerResult.textPreview || ""
+                  workerResult.marksSummary ||
+                  workerResult.textPreview ||
+                  ""
                 ),
                 officialUrl: formUrl
               });
             } catch (waErr) {
-              // WhatsApp fail hone par poori queue processing nahi rukni chahiye
               studentWhatsApp = {
                 success: false,
                 error: waErr.message || "WhatsApp send failed"
               };
-              await logEvent("queue", "warn", "WhatsApp send failed for " + item.rollNo, {
-                error: waErr.message
-              });
+
+              await logEvent(
+                "queue",
+                "warn",
+                "WhatsApp send failed for " + item.rollNo,
+                { error: waErr.message }
+              );
             }
           }
 
@@ -388,8 +466,13 @@ export default async function handler(req, res) {
               workerReason: workerResult.reason || "",
               selected: workerResult.selected || {},
 
-              adminTelegramSent: true,
-              adminTelegramSentAt: FieldValue.serverTimestamp(),
+              adminTelegramSent:
+                adminTelegramAlreadySent ||
+                Boolean(adminTelegramResult),
+              adminTelegramSentAt:
+                adminTelegramAlreadySent
+                  ? outputOld.adminTelegramSentAt || null
+                  : FieldValue.serverTimestamp(),
               adminTelegramMessageId:
                 adminTelegramResult?.message_id ||
                 outputOld.adminTelegramMessageId ||
@@ -435,14 +518,17 @@ export default async function handler(req, res) {
                   status: "result_found",
                   resultFound: true,
                   resultId,
-
-                  adminTelegramSent: true,
-                  adminTelegramSentAt: FieldValue.serverTimestamp(),
+                  adminTelegramSent:
+                    adminTelegramAlreadySent ||
+                    Boolean(adminTelegramResult),
+                  adminTelegramSentAt:
+                    adminTelegramAlreadySent
+                      ? outputOld.adminTelegramSentAt || null
+                      : FieldValue.serverTimestamp(),
                   adminTelegramMessageId:
                     adminTelegramResult?.message_id ||
                     outputOld.adminTelegramMessageId ||
                     null,
-
                   studentWhatsAppSent:
                     studentWhatsApp?.success ||
                     outputOld.studentWhatsAppSent ||
@@ -453,22 +539,26 @@ export default async function handler(req, res) {
                     studentWhatsApp && !studentWhatsApp.success
                       ? studentWhatsApp.error
                       : outputOld.studentWhatsAppLastError || "",
-
                   updatedAt: FieldValue.serverTimestamp()
                 },
                 { merge: true }
               );
           }
 
-          found += 1;
+          found++;
 
           results.push({
             queueId: doc.id,
             rollNo: item.rollNo,
             yearPart: item.yearPart,
             status: "result_found",
-            adminTelegramSent: !adminTelegramAlreadySent,
-            studentWhatsAppSent: studentWhatsApp?.success || false,
+            adminTelegramSent:
+              adminTelegramAlreadySent ||
+              Boolean(adminTelegramResult),
+            studentWhatsAppSent: Boolean(
+              studentWhatsApp?.success ||
+              outputOld.studentWhatsAppSent
+            ),
             studentWhatsAppMethod: studentWhatsApp?.method || "",
             studentWhatsAppError:
               studentWhatsApp && !studentWhatsApp.success
@@ -477,7 +567,9 @@ export default async function handler(req, res) {
           });
         } else {
           const finalStatus =
-            attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
+            attempts >= MAX_ATTEMPTS
+              ? "not_found"
+              : "failed_retrying";
 
           await doc.ref.set(
             {
@@ -507,52 +599,56 @@ export default async function handler(req, res) {
               );
           }
 
-          failed += 1;
+          failed++;
 
           results.push({
             queueId: doc.id,
             rollNo: item.rollNo,
             yearPart: item.yearPart,
             status: finalStatus,
-            reason: workerResult.reason || workerResult.error || ""
+            reason:
+              workerResult.reason ||
+              workerResult.error ||
+              "Result not found"
           });
         }
       } catch (err) {
-        failed += 1;
+        failed++;
 
-        const finalStatus =
-          attempts >= MAX_ATTEMPTS ? "not_found" : "failed_retrying";
-
+        // Infrastructure/HTTP errors are not proof that a result
+        // does not exist. Keep them retryable.
         await doc.ref.set(
           {
-            status: finalStatus,
-            lastError: err.message,
+            status: "failed_retrying",
+            lastError: String(err.message || err).slice(0, 1000),
             updatedAt: FieldValue.serverTimestamp()
           },
           { merge: true }
         );
 
-        await logEvent("queue", "error", err.message, {
-          queueId: doc.id
-        });
+        await logEvent(
+          "queue",
+          "error",
+          String(err.message || err),
+          { queueId: doc.id }
+        );
 
         results.push({
           queueId: doc.id,
           rollNo: item.rollNo,
           yearPart: item.yearPart,
-          status: finalStatus,
-          error: err.message
+          status: "failed_retrying",
+          error: String(err.message || err).slice(0, 1000)
         });
       }
     }
 
-    await logEvent("queue", "info", "Queue processing completed with worker", {
-      processed,
-      found,
-      failed,
-      synced,
-      results
-    });
+    await logEvent(
+      "queue",
+      "info",
+      "Queue processing completed with worker",
+      { processed, found, failed, synced, results }
+    );
 
     return res.status(200).json({
       success: true,
