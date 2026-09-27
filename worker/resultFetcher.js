@@ -396,6 +396,52 @@ async function fillRollFields(page, rollNo) {
   return filled;
 }
 
+async function fillDobField(page, dob) {
+  if (!dob) {
+    return { filled: false, reason: "dob not provided" };
+  }
+
+  const selectors = [
+    "#txtDOB",
+    'input[name="txtDOB"]',
+    "#txtDateOfBirth",
+    'input[name="txtDateOfBirth"]',
+    "#txtBirthDate",
+    'input[name="txtBirthDate"]',
+    'input[id*="DOB" i]',
+    'input[name*="DOB" i]',
+    'input[id*="Birth" i]',
+    'input[name*="Birth" i]',
+    'input[placeholder*="DD/MM/YYYY" i]'
+  ];
+
+  const selector = await findFirstVisible(page, selectors);
+
+  if (!selector) {
+    return { filled: false, reason: "date of birth input not found" };
+  }
+
+  const field = page.locator(selector).first();
+
+  try {
+    await field.fill(dob);
+  } catch {
+    // Some DOB inputs are readonly and driven by a datepicker widget —
+    // set the value directly and fire the events the page listens for.
+    await field.evaluate((el, value) => {
+      el.value = value;
+    }, dob);
+  }
+
+  await field.dispatchEvent("input");
+  await field.dispatchEvent("change");
+
+  return {
+    filled: true,
+    selector
+  };
+}
+
 async function clickSubmit(page) {
   const submitSelectors = [
     "#btnSave",
@@ -515,7 +561,8 @@ export async function fetchResultWithBrowser({
   rollNo,
   yearPart,
   resultType = "MAIN",
-  formUrl
+  formUrl,
+  dob
 }) {
   let browser = null;
 
@@ -570,6 +617,8 @@ export async function fetchResultWithBrowser({
 
     const filledRollFields = await fillRollFields(page, rollNo);
 
+    const filledDob = await fillDobField(page, dob);
+
     const clickedSelector = await clickSubmit(page);
 
     const afterUrl = page.url();
@@ -621,6 +670,7 @@ export async function fetchResultWithBrowser({
         selectedLabel: selected.selectedLabel,
         resultTypeSelection,
         filledRollFields,
+        filledDob,
         clickedSelector
       },
       marksSummary,
