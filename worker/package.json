@@ -1,14 +1,15 @@
 {
   "name": "pdusu-result-worker",
+  "private": true,
   "version": "1.0.0",
-  "description": "Browser worker for PDUSU result fetching using Playwright",
-  "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "express": "4.19.2",
-    "playwright": "1.46.0"
+    "@cloudflare/playwright": "^1.3.6"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
   }
 }
