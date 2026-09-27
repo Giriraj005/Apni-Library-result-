@@ -1,7 +1,7 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
-import { hashText } from "../../lib/resultDiscovery";
-import { stripHtml, parseHtmlTables } from "../../lib/resultParser";
+import { hashText, absolutizeUrl } from "../../lib/resultDiscovery";
+import { stripHtml, parseHtmlTablesWithLinks } from "../../lib/resultParser";
 import { logEvent } from "../../lib/logger";
 import { sendTelegramMessage } from "../../lib/telegram";
 import { sendWhatsAppResultAlertToAdmins } from "../../lib/whatsapp";
@@ -14,10 +14,17 @@ import {
 // Courses/semesters Apni Library specifically tracks for its students.
 // Rows matching these get a priority marker in the alert, but every
 // new row on the schedule table still gets an alert either way.
-const PRIORITY_COURSES = ["B.A.", "B.SC", "B.COM", "B.B.A.", "B.C.A."];
-// All six semesters, not just I/III/V. Word-boundary matched so
-// "SEMESTER I" doesn't also match inside "SEMESTER II".
-const PRIORITY_SEMESTER_REGEX = /\bSEMESTER\s*(I|II|III|IV|V|VI)\b/i;
+// Dot/space-tolerant: matches "B.A.", "BA", "B COM", "BCOM", "B.B.A.",
+// "BBA" etc. The old version only matched the dotted forms, so it
+// silently missed rows written as "BSC,BBA,BCA,BCOM" (no dots), which
+// is how the real page actually writes them.
+const PRIORITY_COURSE_REGEX =
+  /\bB\.?\s?A\.?\b|\bB\.?\s?SC\b|\bB\.?\s?COM\b|\bB\.?\s?B\.?\s?A\.?\b|\bB\.?\s?C\.?\s?A\.?\b/i;
+// All six semesters count now, not just I/III/V - and the numeral
+// doesn't reliably come after the word (real rows read "II AND IV
+// SEMESTER", not "SEMESTER II"), so just detect semester wording at
+// all rather than trying to parse out which numeral.
+const PRIORITY_SEMESTER_REGEX = /\bSEM(ESTER)?\b/i;
 
 // Matches dd/mm/yyyy, dd-mm-yyyy, dd.mm.yyyy style dates as seen in the
 // official results schedule table (e.g. "27/09/2026").
@@ -38,7 +45,7 @@ function cleanId(value) {
 
 function isPriorityRow(label) {
   const upper = label.toUpperCase();
-  const hasCourse = PRIORITY_COURSES.some((c) => upper.includes(c));
+  const hasCourse = PRIORITY_COURSE_REGEX.test(upper);
   const hasSemester = PRIORITY_SEMESTER_REGEX.test(upper);
   return hasCourse && hasSemester;
 }
@@ -47,24 +54,33 @@ function isPriorityRow(label) {
 // (course/semester label, declared date) rows. Each row becomes its own
 // independently-tracked "declaration" event, instead of hashing the
 // whole page and re-firing on any unrelated change to it.
-function extractScheduleRows(html) {
-  const tables = parseHtmlTables(html);
+function extractScheduleRows(html, baseUrl) {
+  const tables = parseHtmlTablesWithLinks(html);
   const rows = [];
   const seenIds = new Set();
 
   for (const table of tables) {
     for (const cells of table) {
-      const dateIndex = cells.findIndex((c) => DATE_REGEX.test(c));
+      const dateIndex = cells.findIndex((c) => DATE_REGEX.test(c.text));
       if (dateIndex === -1) continue;
 
-      const dateMatch = cells[dateIndex].match(DATE_REGEX);
+      const dateMatch = cells[dateIndex].text.match(DATE_REGEX);
       const date = `${dateMatch[1].padStart(2, "0")}/${dateMatch[2].padStart(
         2,
         "0"
       )}/${dateMatch[3]}`;
 
+      // A row's own "Click Here" style link, if it has one, points at
+      // that specific course/semester's result page - more useful than
+      // the generic listing page. Its cell is dropped from the label
+      // text (that's where the "Click Here -" noise was coming from).
+      const linkCell = cells.find((c) => c.href);
+      const directUrl = linkCell ? absolutizeUrl(linkCell.href, baseUrl) : "";
+
       const label = cells
-        .filter((_, i) => i !== dateIndex)
+        .filter((c, i) => i !== dateIndex && !c.href)
+        .map((c) => c.text)
+        .filter((t) => t && !/^click here$/i.test(t.trim()))
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
@@ -75,14 +91,20 @@ function extractScheduleRows(html) {
       if (seenIds.has(id)) continue;
       seenIds.add(id);
 
-      rows.push({ label, date, id, priority: isPriorityRow(label) });
+      rows.push({
+        label,
+        date,
+        id,
+        priority: isPriorityRow(label),
+        directUrl
+      });
     }
   }
 
   return rows;
 }
 
-function buildScheduleRowAlert({ label, date, url, priority }) {
+function buildScheduleRowAlert({ label, date, url, priority, directUrl }) {
   return [
     priority
       ? "📢 <b>New PDUSU Result Declared (Priority)</b>"
@@ -92,7 +114,7 @@ function buildScheduleRowAlert({ label, date, url, priority }) {
     `Declared on: ${date}`,
     "",
     "<b>Open Official Result Page:</b>",
-    url,
+    directUrl || url,
     "",
     "Students official portal par apna roll number check karein.",
     "",
@@ -304,7 +326,7 @@ export default async function handler(req, res) {
     const text = stripHtml(html);
     const pageHash = hashText(text);
 
-    const scheduleRows = extractScheduleRows(html);
+    const scheduleRows = extractScheduleRows(html, url);
 
     await db.collection("result_sources").doc("pdusu_main").set(
       {
@@ -348,6 +370,7 @@ export default async function handler(req, res) {
             rowId: row.id,
             priority: row.priority,
             url,
+            directUrl: row.directUrl || "",
             sent: true,
             seeded: true,
             createdAt: FieldValue.serverTimestamp()
@@ -364,7 +387,8 @@ export default async function handler(req, res) {
           label: row.label,
           date: row.date,
           url,
-          priority: row.priority
+          priority: row.priority,
+          directUrl: row.directUrl
         })
       });
 
@@ -392,6 +416,7 @@ export default async function handler(req, res) {
           rowId: row.id,
           priority: row.priority,
           url,
+          directUrl: row.directUrl || "",
           telegramSent: true,
           telegramMessageId,
           whatsapp,
