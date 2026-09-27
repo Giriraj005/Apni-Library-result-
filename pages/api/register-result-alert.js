@@ -22,6 +22,30 @@ function normalizeMobile(value) {
   return digits;
 }
 
+// Accepts either "YYYY-MM-DD" (from the frontend's <input type="date">)
+// or "DD/MM/YYYY" (already-correct format) and always returns
+// "DD/MM/YYYY", which is what the university portal's form expects.
+// Returns "" if the value doesn't match either shape.
+function normalizeDob(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) return "";
+
+  const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+  }
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    return `${d}/${m}/${y}`;
+  }
+
+  return "";
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -46,6 +70,7 @@ export default async function handler(req, res) {
 
     const rollNo = normalizeRollNo(body.rollNo);
     const mobile = normalizeMobile(body.mobile);
+    const dateOfBirth = normalizeDob(body.dateOfBirth);
 
     // ✅ FIX: Frontend 'consentAdminPreview' bhejta hai — sab accept karo
     const anyConsent = Boolean(
@@ -86,6 +111,13 @@ export default async function handler(req, res) {
       });
     }
 
+    if (!dateOfBirth) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid date of birth is required"
+      });
+    }
+
     // ✅ FIX: Sirf ek combined consent check
     if (!consentTelegramGroup) {
       return res.status(400).json({
@@ -118,8 +150,7 @@ export default async function handler(req, res) {
 
       studentName,
       mobile,
-
-      consentTelegramGroup,
+      dateOfBirth,
       consentWhatsAppResult,
 
       status: "waiting",
@@ -149,6 +180,7 @@ export default async function handler(req, res) {
               resultType,
               formUrl,
               formKey,
+              dateOfBirth,
               registrationId: id,
               status: "pending",
               attempts: 0,
@@ -165,6 +197,7 @@ export default async function handler(req, res) {
           resultType,
           formUrl,
           formKey,
+          dateOfBirth,
           registrationId: id,
           status: "pending",
           attempts: 0,
@@ -203,6 +236,7 @@ export default async function handler(req, res) {
       resultType,
       formUrl,
       formKey,
+      dateOfBirth,
       registrationId: id,
       status: "pending",
       attempts: 0,
