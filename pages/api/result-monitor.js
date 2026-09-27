@@ -80,9 +80,15 @@ function extractScheduleRows(html, baseUrl) {
       const label = cells
         .filter((c, i) => i !== dateIndex && !c.href)
         .map((c) => c.text)
-        .filter((t) => t && !/^click here$/i.test(t.trim()))
+        .filter(
+          (t) =>
+            t &&
+            !/^click here$/i.test(t.trim()) &&
+            !/^[-–—:.,\s]*$/.test(t.trim())
+        )
         .join(" ")
         .replace(/\s+/g, " ")
+        .replace(/[\s\-–—]+$/, "")
         .trim();
 
       if (!label || !COURSE_ROW_PATTERN.test(label)) continue;
@@ -104,11 +110,44 @@ function extractScheduleRows(html, baseUrl) {
   return rows;
 }
 
-function buildScheduleRowAlert({ label, date, url, priority, directUrl }) {
+function buildBrandFooter() {
   return [
-    priority
-      ? "📢 <b>New PDUSU Result Declared (Priority)</b>"
-      : "📢 <b>New PDUSU Result Declared</b>",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    "🎓 PIYUSH PAREEK SIKAR",
+    "Your Trusted Source for University Updates & Study Materials",
+    "",
+    "📚 Academic Updates & Resources",
+    "",
+    "- UG | PG | B.Ed. Exam Updates",
+    "- University Results & Notifications",
+    "- Examination Time Tables & Admit Cards",
+    "- Syllabus, Notes & Important Questions",
+    "- Semester-wise Study Materials",
+    "",
+    "🔔 STAY CONNECTED WITH US",
+    "",
+    "📲 Join Our Official Channels",
+    "",
+    "🔹 Telegram: https://t.me/team_piyush_pareek",
+    "",
+    "🔹 WhatsApp Channel: https://whatsapp.com/channel/0029Vabq5HHCxoAuorSPOF0Z",
+    "",
+    "🔹 YouTube: https://youtube.com/@piyushpareeksikar",
+    "",
+    "",
+    "📌 विश्वविद्यालय से जुड़ी नवीनतम अपडेट्स, परीक्षा संबंधी सूचनाओं एवं उपयोगी अध्ययन सामग्री के लिए हमारे आधिकारिक चैनलों से जुड़े रहें।",
+    "",
+    "PIYUSH PAREEK SIKAR",
+    "Learn • Prepare • Succeed",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+}
+
+function buildScheduleRowAlert({ label, date, url, directUrl }) {
+  return [
+    "📢 <b>Result Declared</b>",
     "",
     `<b>${label}</b>`,
     `Declared on: ${date}`,
@@ -116,9 +155,7 @@ function buildScheduleRowAlert({ label, date, url, priority, directUrl }) {
     "<b>Open Official Result Page:</b>",
     directUrl || url,
     "",
-    "Students official portal par apna roll number check karein.",
-    "",
-    "Source: Official University Result Portal"
+    buildBrandFooter()
   ].join("\n");
 }
 
@@ -137,7 +174,7 @@ function buildDirectFormTelegramAlert(form) {
     "Students अपना course/semester select करके roll number से result check करें।",
     "अगर server slow/busy दिखे, तो कुछ मिनट बाद दोबारा try करें।",
     "",
-    "Source: Official University Result Portal"
+    buildBrandFooter()
   ].join("\n");
 }
 
@@ -387,7 +424,6 @@ export default async function handler(req, res) {
           label: row.label,
           date: row.date,
           url,
-          priority: row.priority,
           directUrl: row.directUrl
         })
       });
