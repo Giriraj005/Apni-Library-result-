@@ -1,5 +1,5 @@
 {
-  "name": "apni-library-worker",
+  "name": "pdusu-result-worker",
   "main": "src/index.js",
   
   "compatibility_date": "2026-09-27",
