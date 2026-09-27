@@ -67,6 +67,7 @@ app.get("/fetch-result", requireWorkerSecret, async (req, res) => {
     const rollNo = String(req.query.rollNo || "").trim();
     const yearPart = String(req.query.yearPart || "").trim();
     const resultType = String(req.query.resultType || "MAIN").trim();
+    const dob = String(req.query.dob || "").trim();
     const formUrl = String(
       req.query.formUrl ||
         "https://result26.shekhauniexam.in/PG_NEP_RESULT.aspx"
@@ -83,7 +84,8 @@ app.get("/fetch-result", requireWorkerSecret, async (req, res) => {
       rollNo,
       yearPart,
       resultType,
-      formUrl
+      formUrl,
+      dob
     });
 
     return res.status(200).json(result);
@@ -102,6 +104,7 @@ app.post("/fetch-result", requireWorkerSecret, async (req, res) => {
     const rollNo = String(body.rollNo || "").trim();
     const yearPart = String(body.yearPart || "").trim();
     const resultType = String(body.resultType || "MAIN").trim();
+    const dob = String(body.dob || "").trim();
     const formUrl = String(
       body.formUrl ||
         "https://result26.shekhauniexam.in/PG_NEP_RESULT.aspx"
@@ -118,7 +121,8 @@ app.post("/fetch-result", requireWorkerSecret, async (req, res) => {
       rollNo,
       yearPart,
       resultType,
-      formUrl
+      formUrl,
+      dob
     });
 
     return res.status(200).json(result);
