@@ -592,6 +592,601 @@ export async function fetchResultWithBrowser({
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     });
 
+Updated resultFetcher.js
+import { chromium } from "playwright";
+
+function cleanText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalize(value) {
+  return cleanText(value)
+    .toUpperCase()
+    .replace(/&/g, "AND")
+    .replace(/[^A-Z0-9]+/g, "");
+}
+
+async function setupFastPage(page) {
+  await page.route("**/*", async (route) => {
+    const resourceType = route.request().resourceType();
+
+    if (["image", "font", "media"].includes(resourceType)) {
+      return route.abort();
+    }
+
+    return route.continue();
+  });
+}
+
+async function gotoResultPage(page, url) {
+  try {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 45000
+    });
+  } catch {
+    await page.goto(url, {
+      waitUntil: "commit",
+      timeout: 60000
+    });
+  }
+
+  await page.waitForSelector("select", {
+    timeout: 45000
+  });
+
+  await page.waitForTimeout(1200);
+}
+
+function detectCaptcha(text) {
+  const lower = String(text || "").toLowerCase();
+
+  return (
+    lower.includes("captcha") ||
+    lower.includes("verification code") ||
+    lower.includes("security code")
+  );
+}
+
+function detectNotFound(text) {
+  const lower = String(text || "").toLowerCase();
+
+  const phrases = [
+    "record not found",
+    "not found",
+    "no record",
+    "invalid roll",
+    "wrong roll",
+    "result not declared",
+    "enter roll",
+    "please select"
+  ];
+
+  return phrases.find((phrase) => lower.includes(phrase)) || "";
+}
+
+function extractUsefulLines(text) {
+  const lines = String(text || "")
+    .split(/\n|\r|\|/)
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+
+  const useful = [];
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+
+    if (
+      lower.includes("student") ||
+      lower.includes("name") ||
+      lower.includes("father") ||
+      lower.includes("mother") ||
+      lower.includes("roll") ||
+      lower.includes("enrol") ||
+      lower.includes("subject") ||
+      lower.includes("paper") ||
+      lower.includes("marks") ||
+      lower.includes("max") ||
+      lower.includes("min") ||
+      lower.includes("obt") ||
+      lower.includes("total") ||
+      lower.includes("result") ||
+      lower.includes("sgpa") ||
+      lower.includes("cgpa") ||
+      lower.includes("pass") ||
+      lower.includes("fail") ||
+      lower.includes("promoted")
+    ) {
+      useful.push(line);
+    }
+  }
+
+  return [...new Set(useful)].slice(0, 120);
+}
+
+function detectResultStatus({ text, rollNo }) {
+  const lower = String(text || "").toLowerCase();
+
+  if (detectCaptcha(text)) {
+    return {
+      status: "captcha_detected",
+      resultFound: false,
+      reason: "captcha_detected"
+    };
+  }
+
+  const notFound = detectNotFound(text);
+
+  if (notFound) {
+    return {
+      status: "not_found",
+      resultFound: false,
+      reason: notFound
+    };
+  }
+
+  const resultKeywords = [
+    "student name",
+    "father",
+    "mother",
+    "roll no",
+    "rollno",
+    "enrollment",
+    "subject",
+    "paper",
+    "marks",
+    "obtained",
+    "total",
+    "result",
+    "sgpa",
+    "cgpa",
+    "pass",
+    "fail",
+    "promoted"
+  ];
+
+  let hits = 0;
+
+  for (const keyword of resultKeywords) {
+    if (lower.includes(keyword)) hits += 1;
+  }
+
+  if (rollNo && lower.includes(String(rollNo).toLowerCase())) {
+    hits += 2;
+  }
+
+  if (hits >= 4 && String(text || "").length > 250) {
+    return {
+      status: "result_found",
+      resultFound: true,
+      reason: `strong result signals: ${hits}`
+    };
+  }
+
+  if (
+    lower.includes("select year part") &&
+    lower.includes("examination result") &&
+    hits < 4
+  ) {
+    return {
+      status: "form_returned",
+      resultFound: false,
+      reason: "form returned after click"
+    };
+  }
+
+  return {
+    status: "unknown",
+    resultFound: false,
+    reason: "no clear result signature"
+  };
+}
+
+async function getDropdownOptions(page, selector) {
+  return page.locator(selector).evaluate((select) => {
+    return Array.from(select.options).map((option) => ({
+      value: option.value,
+      label: option.textContent.trim()
+    }));
+  });
+}
+
+async function selectDropdownByNormalizedText(page, selector, wantedText) {
+  const options = await getDropdownOptions(page, selector);
+  const target = normalize(wantedText);
+
+  const exact = options.find(
+    (option) =>
+      normalize(option.label) === target || normalize(option.value) === target
+  );
+
+  if (exact) {
+    await page.selectOption(selector, exact.value);
+    await page.locator(selector).dispatchEvent("change");
+    await page.waitForTimeout(800);
+
+    return {
+      selectedValue: exact.value,
+      selectedLabel: exact.label,
+      available: options.map((x) => x.label || x.value)
+    };
+  }
+
+  const loose = options.find((option) => {
+    const hay = normalize(`${option.label} ${option.value}`);
+    return hay.includes(target) || target.includes(hay);
+  });
+
+  if (loose) {
+    await page.selectOption(selector, loose.value);
+    await page.locator(selector).dispatchEvent("change");
+    await page.waitForTimeout(800);
+
+    return {
+      selectedValue: loose.value,
+      selectedLabel: loose.label,
+      available: options.map((x) => x.label || x.value)
+    };
+  }
+
+  throw new Error(
+    `Dropdown option not found: ${wantedText}. Available: ${options
+      .map((x) => x.label || x.value)
+      .join(", ")}`
+  );
+}
+
+async function findFirstVisible(page, selectors) {
+  for (const selector of selectors) {
+    const loc = page.locator(selector).first();
+
+    try {
+      if ((await loc.count()) && (await loc.isVisible())) {
+        return selector;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return "";
+}
+
+async function selectResultTypeIfAvailable(page, resultType) {
+  const selects = await page.locator("select").evaluateAll((items) => {
+    return items.map((select, index) => ({
+      index,
+      id: select.id || "",
+      name: select.name || "",
+      options: Array.from(select.options).map((option) => ({
+        value: option.value,
+        label: option.textContent.trim()
+      }))
+    }));
+  });
+
+  const typeSelect = selects.find((select) => {
+    const hay = `${select.id} ${select.name} ${select.options
+      .map((o) => `${o.label} ${o.value}`)
+      .join(" ")}`.toLowerCase();
+
+    return (
+      hay.includes("main") ||
+      hay.includes("reval") ||
+      hay.includes("supp") ||
+      hay.includes("result type")
+    );
+  });
+
+  if (!typeSelect) {
+    return {
+      selected: false,
+      reason: "result type dropdown not found"
+    };
+  }
+
+  const selector = typeSelect.id
+    ? `#${typeSelect.id}`
+    : typeSelect.name
+    ? `select[name="${typeSelect.name}"]`
+    : `select >> nth=${typeSelect.index}`;
+
+  const target = normalize(resultType || "MAIN");
+
+  const exact =
+    typeSelect.options.find((o) => normalize(o.label) === target) ||
+    typeSelect.options.find((o) => normalize(o.value) === target) ||
+    typeSelect.options.find((o) => normalize(o.label).includes(target)) ||
+    typeSelect.options.find((o) => normalize(o.value).includes(target));
+
+  if (!exact) {
+    return {
+      selected: false,
+      selector,
+      reason: "MAIN option not found",
+      available: typeSelect.options
+    };
+  }
+
+  await page.selectOption(selector, exact.value);
+  await page.locator(selector).dispatchEvent("change");
+  await page.waitForTimeout(500);
+
+  return {
+    selected: true,
+    selector,
+    value: exact.value,
+    label: exact.label
+  };
+}
+
+async function fillRollFields(page, rollNo) {
+  const selectors = [
+    "#txtfromNo",
+    'input[name="txtfromNo"]',
+    "#txtFromNo",
+    'input[name="txtFromNo"]',
+    "#txttoNo",
+    'input[name="txttoNo"]',
+    "#txtToNo",
+    'input[name="txtToNo"]',
+    "#txtRollNo",
+    'input[name="txtRollNo"]',
+    'input[id*="Roll" i]',
+    'input[name*="Roll" i]',
+    'input[type="text"]'
+  ];
+
+  const filled = [];
+
+  for (const selector of selectors) {
+    const loc = page.locator(selector);
+
+    try {
+      const count = await loc.count();
+
+      for (let i = 0; i < count; i++) {
+        const item = loc.nth(i);
+
+        if (!(await item.isVisible())) continue;
+
+        const currentValue = await item.inputValue().catch(() => "");
+        const name = await item.getAttribute("name").catch(() => "");
+        const id = await item.getAttribute("id").catch(() => "");
+
+        const key = `${id || ""}_${name || ""}_${i}`;
+
+        if (filled.find((x) => x.key === key)) continue;
+
+        await item.fill(String(rollNo));
+        await item.dispatchEvent("input");
+        await item.dispatchEvent("change");
+
+        filled.push({
+          key,
+          selector,
+          id,
+          name,
+          previousValue: currentValue
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!filled.length) {
+    throw new Error("Roll number input not found");
+  }
+
+  return filled;
+}
+
+async function fillDobField(page, dob) {
+  if (!dob) {
+    return { filled: false, reason: "dob not provided" };
+  }
+
+  const selectors = [
+    "#txtDOB",
+    'input[name="txtDOB"]',
+    "#txtDateOfBirth",
+    'input[name="txtDateOfBirth"]',
+    "#txtBirthDate",
+    'input[name="txtBirthDate"]',
+    'input[id*="DOB" i]',
+    'input[name*="DOB" i]',
+    'input[id*="Birth" i]',
+    'input[name*="Birth" i]',
+    'input[placeholder*="DD/MM/YYYY" i]'
+  ];
+
+  const selector = await findFirstVisible(page, selectors);
+
+  if (!selector) {
+    return { filled: false, reason: "date of birth input not found" };
+  }
+
+  const field = page.locator(selector).first();
+
+  try {
+    await field.fill(dob);
+  } catch {
+    // Some DOB inputs are readonly and driven by a datepicker widget —
+    // set the value directly and fire the events the page listens for.
+    await field.evaluate((el, value) => {
+      el.value = value;
+    }, dob);
+  }
+
+  await field.dispatchEvent("input");
+  await field.dispatchEvent("change");
+
+  return {
+    filled: true,
+    selector
+  };
+}
+
+async function clickSubmit(page) {
+  const submitSelectors = [
+    "#btnSave",
+    'input[name="btnSave"]',
+    'input[type="submit"]',
+    'button[type="submit"]',
+    'input[value*="Show"]',
+    'input[value*="Result"]',
+    'input[value*="Submit"]',
+    'button:has-text("Show")',
+    'button:has-text("Result")',
+    'button:has-text("Submit")'
+  ];
+
+  const selector = await findFirstVisible(page, submitSelectors);
+
+  if (!selector) {
+    throw new Error("Submit button not found");
+  }
+
+  await page.keyboard.press("Escape");
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  const button = page.locator(selector).first();
+  await button.scrollIntoViewIfNeeded();
+  await button.click({ force: true });
+
+  await Promise.race([
+    page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {}),
+    page.waitForTimeout(5000)
+  ]);
+
+  await page.waitForTimeout(3000);
+
+  return selector;
+}
+
+async function extractTableText(page) {
+  const tableTexts = await page.locator("table").evaluateAll((tables) => {
+    return tables.map((table) => table.innerText || "").filter(Boolean);
+  });
+
+  return tableTexts.join("\n\n");
+}
+
+export async function fetchOptionsWithBrowser({ url }) {
+  let browser = null;
+
+  const startedAt = Date.now();
+
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
+
+    const context = await browser.newContext({
+      viewport: {
+        width: 1366,
+        height: 768
+      },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    });
+
+    const page = await context.newPage();
+    page.setDefaultTimeout(60000);
+
+    await setupFastPage(page);
+    await gotoResultPage(page, url);
+
+    const finalUrl = page.url();
+
+    const selects = await page.locator("select").evaluateAll((items) => {
+      return items.map((select, index) => ({
+        index,
+        id: select.id || "",
+        name: select.name || "",
+        label:
+          select.closest("tr")?.innerText?.split("\n")?.[0]?.trim() ||
+          select.parentElement?.innerText?.split("\n")?.[0]?.trim() ||
+          "",
+        options: Array.from(select.options)
+          .map((option) => ({
+            value: option.value,
+            label: option.textContent.trim()
+          }))
+          .filter((option) => option.value || option.label)
+      }));
+    });
+
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+
+    await browser.close();
+
+    return {
+      success: true,
+      url,
+      finalUrl,
+      selects,
+      textPreview: bodyText.slice(0, 1000),
+      durationMs: Date.now() - startedAt
+    };
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+
+    return {
+      success: false,
+      url,
+      error: err.message || "Failed to fetch options",
+      durationMs: Date.now() - startedAt
+    };
+  }
+}
+
+export async function fetchResultWithBrowser({
+  rollNo,
+  yearPart,
+  resultType = "MAIN",
+  formUrl,
+  dob
+}) {
+  let browser = null;
+
+  const startedAt = Date.now();
+
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
+
+    const context = await browser.newContext({
+      viewport: {
+        width: 1366,
+        height: 768
+      },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    });
+
     const page = await context.newPage();
 
     page.setDefaultTimeout(60000);
@@ -697,4 +1292,4 @@ export async function fetchResultWithBrowser({
       durationMs: Date.now() - startedAt
     };
   }
-    }
+}v
