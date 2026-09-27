@@ -462,7 +462,11 @@ async function clickSubmit(page) {
     throw new Error("Submit button not found");
   }
 
-  await page.locator(selector).first().click();
+  await page.keyboard.press("Escape");
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  const button = page.locator(selector).first();
+  await button.scrollIntoViewIfNeeded();
+  await button.click({ force: true });
 
   await Promise.race([
     page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {}),
@@ -508,7 +512,7 @@ export async function fetchOptionsWithBrowser({ url }) {
     });
 
     const page = await context.newPage();
-    page.setDefaultTimeout(30000);
+    page.setDefaultTimeout(60000);
 
     await setupFastPage(page);
     await gotoResultPage(page, url);
@@ -590,7 +594,7 @@ export async function fetchResultWithBrowser({
 
     const page = await context.newPage();
 
-    page.setDefaultTimeout(30000);
+    page.setDefaultTimeout(60000);
 
     await setupFastPage(page);
     await gotoResultPage(page, formUrl);
@@ -693,4 +697,4 @@ export async function fetchResultWithBrowser({
       durationMs: Date.now() - startedAt
     };
   }
-}
+    }
