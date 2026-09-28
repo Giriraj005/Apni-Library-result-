@@ -120,7 +120,8 @@ export default function AdminCaptchaPage() {
           item,
           sessionId: out.sessionId,
           imageBase64: out.imageBase64,
-          fullPage: out.fullPage
+          fullPage: out.fullPage,
+          formInfo: out.formInfo || null
         });
       } else {
         await finish(out, item);
@@ -147,7 +148,12 @@ export default function AdminCaptchaPage() {
       });
 
       if (out.state === "captcha_rejected") {
-        setActive({ ...active, imageBase64: out.imageBase64, fullPage: out.fullPage });
+        setActive({
+          ...active,
+          imageBase64: out.imageBase64,
+          fullPage: out.fullPage,
+          formInfo: out.formInfo || active.formInfo || null
+        });
         setText("");
         const reason = out.reason || "no reason given";
 
@@ -161,7 +167,8 @@ export default function AdminCaptchaPage() {
 
         setMessage({
           type: "warn",
-          text: `Rejected (${reason}). A new CAPTCHA is shown, try again.${hint}`
+          text: `Rejected (${reason}). A new CAPTCHA is shown, try again.${hint}`,
+          debug: out.pageText || ""
         });
       } else if (out.state === "expired") {
         setActive(null);
@@ -216,6 +223,11 @@ export default function AdminCaptchaPage() {
             className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-bold ${tone[message.type]}`}
           >
             {message.text}
+            {message.debug && (
+              <pre className="mt-2 whitespace-pre-wrap break-words text-xs font-semibold">
+                Site said: {message.debug}
+              </pre>
+            )}
           </div>
         )}
 
@@ -254,6 +266,12 @@ export default function AdminCaptchaPage() {
               alt="CAPTCHA"
               className="mt-3 w-full rounded-xl border border-slate-200 bg-white"
             />
+
+            {active.formInfo && (
+              <p className="mt-2 break-words text-xs font-semibold text-slate-500">
+                Form filled: {JSON.stringify(active.formInfo)}
+              </p>
+            )}
 
             {active.fullPage && (
               <p className="mt-2 text-xs font-semibold text-slate-500">
