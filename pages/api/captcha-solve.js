@@ -1,4 +1,4 @@
-hereimport { db, FieldValue } from "../../lib/firebaseAdmin";
+import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireAdmin, safeJsonError } from "../../lib/security";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 import { logEvent } from "../../lib/logger";
