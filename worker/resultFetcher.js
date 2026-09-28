@@ -583,53 +583,94 @@ async function fillRollFields(page, rollNo) {
   return filled;
 }
 
+const DOB_SELECTORS = [
+  "#txtDOB",
+  'input[name="txtDOB"]',
+  "#txtDateOfBirth",
+  'input[name="txtDateOfBirth"]',
+  "#txtBirthDate",
+  'input[name="txtBirthDate"]',
+  'input[id*="DOB" i]',
+  'input[name*="DOB" i]',
+  'input[id*="Birth" i]',
+  'input[name*="Birth" i]',
+  'input[placeholder*="DD/MM/YYYY" i]'
+];
+
+// Puts the date into the box the way a person would (real key presses, so a
+// date-picker widget sees it), then checks the box really holds it. If the box
+// is read-only or the widget ignores typing, sets the value directly.
+async function typeDobInto(field, dob) {
+  try {
+    await field.click({ timeout: 3000 });
+    await field.press("Control+A");
+    await field.press("Backspace");
+    await field.pressSequentially(dob, { delay: 60 });
+  } catch {
+    // fall through to the direct set below
+  }
+
+  let value = await field.inputValue().catch(() => "");
+
+  if (value !== dob) {
+    await field
+      .evaluate((el, v) => {
+        el.removeAttribute("readonly");
+        el.value = v;
+      }, dob)
+      .catch(() => {});
+
+    value = await field.inputValue().catch(() => "");
+  }
+
+  await field.dispatchEvent("input").catch(() => {});
+  await field.dispatchEvent("change").catch(() => {});
+  await field.press("Tab").catch(() => {});
+
+  return value;
+}
+
 async function fillDobField(page, dob) {
   if (!dob) {
     return { filled: false, reason: "dob not provided" };
   }
 
-  const selectors = [
-    "#txtDOB",
-    'input[name="txtDOB"]',
-    "#txtDateOfBirth",
-    'input[name="txtDateOfBirth"]',
-    "#txtBirthDate",
-    'input[name="txtBirthDate"]',
-    'input[id*="DOB" i]',
-    'input[name*="DOB" i]',
-    'input[id*="Birth" i]',
-    'input[name*="Birth" i]',
-    'input[placeholder*="DD/MM/YYYY" i]'
-  ];
-
-  const selector = await findFirstVisible(page, selectors);
+  const selector = await findFirstVisible(page, DOB_SELECTORS);
 
   if (!selector) {
     return { filled: false, reason: "date of birth input not found" };
   }
 
   const field = page.locator(selector).first();
-
-  try {
-    await field.fill(dob);
-  } catch {
-    // Some DOB inputs are readonly and driven by a datepicker widget —
-    // set the value directly and fire the events the page listens for.
-    await field.evaluate((el, value) => {
-      el.value = value;
-    }, dob);
-  }
-
-  await field.dispatchEvent("input");
-  await field.dispatchEvent("change");
+  const value = await typeDobInto(field, dob);
 
   return {
-    filled: true,
-    selector
+    filled: value === dob,
+    selector,
+    value
   };
 }
 
-async function clickSubmit(page) {
+// Runs right before the submit click: some date-pickers wipe the box when the
+// page is clicked or Escape is pressed, so put the date back if it is gone.
+async function ensureDobBeforeSubmit(page, dob) {
+  if (!dob) return null;
+
+  const selector = await findFirstVisible(page, DOB_SELECTORS);
+
+  if (!selector) return { found: false };
+
+  const field = page.locator(selector).first();
+  const before = await field.inputValue().catch(() => "");
+
+  if (before === dob) return { found: true, before, after: before };
+
+  const after = await typeDobInto(field, dob);
+
+  return { found: true, before, after };
+}
+
+async function clickSubmit(page, dob = "") {
   const submitSelectors = [
     "#btnSave",
     'input[name="btnSave"]',
@@ -651,6 +692,12 @@ async function clickSubmit(page) {
 
   await page.keyboard.press("Escape");
   await page.locator("body").click({ position: { x: 5, y: 5 } });
+
+  // Debug + safety: make sure the DOB box still holds the date at click time.
+  page._dobCheck = await ensureDobBeforeSubmit(page, dob).catch((err) => ({
+    error: err.message
+  }));
+
   const button = page.locator(selector).first();
   await button.scrollIntoViewIfNeeded();
   await button.click({ force: true });
@@ -972,7 +1019,7 @@ export async function fetchResultWithBrowser({
         }
 
         form.captchaSelector = await fillCaptchaField(page, typed);
-        clickedSelector = await clickSubmit(page);
+        clickedSelector = await clickSubmit(page, dob);
         snapshot = await snapshotPage(page, rollNo, dialogs);
       } else if (captchaOnPage && mode === "browser") {
         snapshot = await waitForManualResult(page, {
@@ -982,7 +1029,7 @@ export async function fetchResultWithBrowser({
         });
       } else {
         // No CAPTCHA on the page (the site may drop it): submit as before.
-        clickedSelector = await clickSubmit(page);
+        clickedSelector = await clickSubmit(page, dob);
         snapshot = await snapshotPage(page, rollNo, dialogs);
       }
 
@@ -1255,7 +1302,7 @@ export async function startCaptchaSession({
     }
 
     // The page did not ask for a CAPTCHA: submit straight away.
-    const clickedSelector = await clickSubmit(session.page);
+    const clickedSelector = await clickSubmit(session.page, session.params.dob);
     const snapshot = await snapshotPage(
       session.page,
       rollNo,
@@ -1289,7 +1336,7 @@ export async function submitCaptchaSession({ sessionId, text }) {
   try {
     await fillCaptchaField(session.page, typed);
 
-    const clickedSelector = await clickSubmit(session.page);
+    const clickedSelector = await clickSubmit(session.page, session.params.dob);
 
     const snapshot = await snapshotPage(
       session.page,
@@ -1305,10 +1352,13 @@ export async function submitCaptchaSession({ sessionId, text }) {
 
       // Debug: what the site showed right after submit (form + any alert()).
       const text = String(snapshot.combinedText || "");
-      const pageText =
+      const tail =
         text.length > 700
           ? `${text.slice(0, 350)} ... ${text.slice(-350)}`
           : text;
+      const pageText = `[DOB box at submit: ${JSON.stringify(
+        session.page._dobCheck || null
+      )}] ${tail}`;
 
       const shown = await prepareCaptchaForm(session);
 
