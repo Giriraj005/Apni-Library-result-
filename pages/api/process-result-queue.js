@@ -2,8 +2,11 @@
 import { db, FieldValue } from "../../lib/firebaseAdmin";
 import { requireCron, safeJsonError } from "../../lib/security";
 import { makeResultEventKey } from "../../lib/resultQueue";
-import { sendTelegramMessage } from "../../lib/telegram";
-import { sendWhatsAppStudentResultAuto } from "../../lib/whatsapp";
+import {
+  sendWhatsAppStudentResultAuto,
+  sendWhatsAppAdminText,
+  sendWhatsAppCaptchaPing
+} from "../../lib/whatsapp";
 import { logEvent } from "../../lib/logger";
 import { getFormUrlForYearPart } from "../../lib/resultCourseCatalog";
 
@@ -170,6 +173,108 @@ function buildAdminMarksMessage({
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// Admin copy of a found result, as plain WhatsApp text (no HTML).
+function buildAdminWhatsAppMessage({
+  rollNo,
+  yearPart,
+  resultType,
+  officialUrl,
+  marksSummary,
+  studentName,
+  mobile
+}) {
+  const cleanSummary = compactMarksSummary(marksSummary);
+
+  return [
+    "✅ *Registered Student Result Found*",
+    "",
+    studentName ? `*Name:* ${studentName}` : "",
+    mobile ? `*Mobile:* ${mobile}` : "",
+    `*Roll No:* ${rollNo}`,
+    `*Course:* ${yearPart}`,
+    `*Type:* ${resultType || "MAIN"}`,
+    "",
+    "*Marks / Result Preview:*",
+    cleanSummary ||
+      "Result found. Please open official link for full marksheet.",
+    "",
+    "*Official Link:*",
+    officialUrl,
+    "",
+    "Note: auto-fetched preview from the official university result portal."
+  ]
+    .filter((line, i, all) => line !== "" || all[i - 1] !== "")
+    .join("\n");
+}
+
+const CAPTCHA_PING_MIN_GAP_MS =
+  (Number(process.env.CAPTCHA_PING_MIN_MINUTES) || 5) * 60 * 1000;
+
+// Pings the admin on WhatsApp when roll numbers are parked for a CAPTCHA.
+// At most one ping per CAPTCHA_PING_MIN_MINUTES. The time of the last ping is
+// kept on the result_sources/pdusu_main doc that this route already reads, so
+// a run with nothing to ping costs no extra Firestore reads.
+async function maybePingCaptcha(req, source) {
+  try {
+    const last = source.lastCaptchaPingAt?.toMillis
+      ? source.lastCaptchaPingAt.toMillis()
+      : 0;
+
+    if (Date.now() - last < CAPTCHA_PING_MIN_GAP_MS) {
+      return { skipped: "pinged recently" };
+    }
+
+    const countSnap = await db
+      .collection("result_queue")
+      .where("status", "==", "needs_captcha")
+      .count()
+      .get();
+
+    const waiting = countSnap.data().count;
+
+    if (!waiting) return { skipped: "none waiting" };
+
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+
+    const base = String(
+      process.env.PUBLIC_APP_URL || `https://${host}`
+    ).replace(/\/+$/, "");
+
+    const out = await sendWhatsAppCaptchaPing({
+      count: waiting,
+      link: `${base}/admin/captcha`
+    });
+
+    if (out.sent > 0) {
+      await db
+        .collection("result_sources")
+        .doc("pdusu_main")
+        .set(
+          {
+            lastCaptchaPingAt: FieldValue.serverTimestamp(),
+            lastCaptchaPingCount: waiting
+          },
+          { merge: true }
+        );
+    } else {
+      await logEvent("queue", "warn", "CAPTCHA WhatsApp ping not delivered", {
+        results: out.results
+      });
+    }
+
+    return { waiting, sent: out.sent, failed: out.failed };
+  } catch (err) {
+    await logEvent(
+      "queue",
+      "warn",
+      "CAPTCHA WhatsApp ping failed: " + (err.message || err),
+      {}
+    );
+
+    return { error: String(err.message || err) };
+  }
 }
 
 async function fetchResultFromWorker({
@@ -456,25 +561,61 @@ export default async function handler(req, res) {
           let adminTelegramResult = null;
           let studentWhatsApp = null;
 
+          // Admin copy goes to WhatsApp now (was Telegram). The stored field
+          // names (adminTelegramSent ...) are kept so old records still work;
+          // they now mean "admin copy sent". A failure here never blocks the
+          // student's message below.
           if (!adminTelegramAlreadySent) {
-            adminTelegramResult = await sendTelegramMessage({
-              chatId:
-                process.env.TELEGRAM_RESULT_ADMIN_CHAT_ID ||
-                process.env.TELEGRAM_ADMIN_CHAT_ID ||
-                process.env.TELEGRAM_PUBLIC_CHAT_ID,
-              text: buildAdminMarksMessage({
-                rollNo: item.rollNo,
-                yearPart: item.yearPart,
-                resultType: item.resultType || "MAIN",
-                officialUrl: formUrl,
-                marksSummary:
-                  workerResult.marksSummary ||
-                  workerResult.textPreview ||
-                  "",
-                studentName: registration?.studentName || "",
-                mobile: registration?.mobile || ""
-              })
-            });
+            try {
+              const adminWa = await sendWhatsAppAdminText({
+                text: buildAdminWhatsAppMessage({
+                  rollNo: item.rollNo,
+                  yearPart: item.yearPart,
+                  resultType: item.resultType || "MAIN",
+                  officialUrl: formUrl,
+                  marksSummary:
+                    workerResult.marksSummary ||
+                    workerResult.textPreview ||
+                    "",
+                  studentName: registration?.studentName || "",
+                  mobile: registration?.mobile || ""
+                }),
+                templateName:
+                  process.env.WHATSAPP_ADMIN_RESULT_TEMPLATE_NAME || "",
+                templateParams: [
+                  item.rollNo,
+                  item.yearPart,
+                  compactMarksSummary(
+                    workerResult.marksSummary ||
+                      workerResult.textPreview ||
+                      ""
+                  ).slice(0, 600) || "Result found",
+                  formUrl
+                ]
+              });
+
+              if (adminWa.sent > 0) {
+                adminTelegramResult = {
+                  message_id:
+                    adminWa.results.find((r) => r.success)?.result
+                      ?.messages?.[0]?.id || "whatsapp"
+                };
+              } else {
+                await logEvent(
+                  "queue",
+                  "warn",
+                  "Admin WhatsApp copy not delivered for " + item.rollNo,
+                  { results: adminWa.results }
+                );
+              }
+            } catch (adminErr) {
+              await logEvent(
+                "queue",
+                "warn",
+                "Admin WhatsApp copy failed for " + item.rollNo,
+                { error: adminErr.message }
+              );
+            }
           }
 
           const studentMobile =
@@ -699,6 +840,9 @@ export default async function handler(req, res) {
       }
     }
 
+    const captchaPing =
+      needsCaptcha > 0 ? await maybePingCaptcha(req, source) : null;
+
     await logEvent(
       "queue",
       "info",
@@ -712,6 +856,7 @@ export default async function handler(req, res) {
       found,
       failed,
       needsCaptcha,
+      captchaPing,
       synced,
       results
     });
