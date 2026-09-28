@@ -11,6 +11,9 @@
     },
     "pages/api/probe-result-form.js": {
       "maxDuration": 30
+    },
+    "pages/api/captcha-solve.js": {
+      "maxDuration": 60
     }
   }
 }
