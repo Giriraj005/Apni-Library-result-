@@ -149,16 +149,26 @@ export default function AdminCaptchaPage() {
       if (out.state === "captcha_rejected") {
         setActive({ ...active, imageBase64: out.imageBase64, fullPage: out.fullPage });
         setText("");
+        const reason = out.reason || "no reason given";
+
+        // "captcha_required" means the form came back with no result and the
+        // CAPTCHA box still showing. The typed text may be right, but the
+        // result may simply not be live for this roll number yet.
+        const hint =
+          reason === "captcha_required"
+            ? " The page reloaded with no result. Your text may be right, but the result might not be live yet."
+            : "";
+
         setMessage({
           type: "warn",
-          text: "Wrong CAPTCHA. A new one is shown, try again."
+          text: `Rejected (${reason}). A new CAPTCHA is shown, try again.${hint}`
         });
       } else if (out.state === "expired") {
         setActive(null);
         setText("");
         setMessage({
           type: "warn",
-          text: `Wrong CAPTCHA (${out.reason || "no reason"}). A new one is shown, try again.`
+          text: "That CAPTCHA timed out. Tap Enter CAPTCHA to start again."
         });
       } else {
         await finish(out, active.item);
