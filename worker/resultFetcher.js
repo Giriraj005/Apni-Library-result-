@@ -1138,7 +1138,14 @@ async function prepareCaptchaForm(session) {
 
   return {
     imageBase64: image.buffer.toString("base64"),
-    fullPage: image.fullPage
+    fullPage: image.fullPage,
+    // Debug: what the worker actually filled in on the university form.
+    formInfo: {
+      year: session.form?.selected?.selectedLabel || "",
+      resultType: session.form?.resultTypeSelection?.selected ?? null,
+      rollFields: (session.form?.filledRollFields || []).length,
+      dob: session.form?.filledDob || null
+    }
   };
 }
 
@@ -1296,6 +1303,13 @@ export async function submitCaptchaSession({ sessionId, text }) {
       // Rejected: load the form again for a new CAPTCHA, same session.
       session.attempts += 1;
 
+      // Debug: what the site showed right after submit (form + any alert()).
+      const text = String(snapshot.combinedText || "");
+      const pageText =
+        text.length > 700
+          ? `${text.slice(0, 350)} ... ${text.slice(-350)}`
+          : text;
+
       const shown = await prepareCaptchaForm(session);
 
       if (shown) {
@@ -1303,6 +1317,7 @@ export async function submitCaptchaSession({ sessionId, text }) {
           state: "captcha_rejected",
           sessionId,
           reason: snapshot.status.reason,
+          pageText,
           ...shown
         };
       }
