@@ -158,7 +158,7 @@ export default function AdminCaptchaPage() {
         setText("");
         setMessage({
           type: "warn",
-          text: "That CAPTCHA timed out. Tap Enter CAPTCHA to start again."
+          text: `Wrong CAPTCHA (${out.reason || "no reason"}). A new one is shown, try again.`
         });
       } else {
         await finish(out, active.item);
