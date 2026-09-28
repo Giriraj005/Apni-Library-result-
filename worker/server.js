@@ -1,7 +1,10 @@
 import express from "express";
 import {
   fetchResultWithBrowser,
-  fetchOptionsWithBrowser
+  fetchOptionsWithBrowser,
+  startCaptchaSession,
+  submitCaptchaSession,
+  closeCaptchaSession
 } from "./resultFetcher.js";
 
 const app = express();
@@ -132,6 +135,67 @@ app.post("/fetch-result", requireWorkerSecret, async (req, res) => {
       error: err.message || "Worker failed"
     });
   }
+});
+
+app.post("/captcha/start", requireWorkerSecret, async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    const rollNo = String(body.rollNo || "").trim();
+    const yearPart = String(body.yearPart || "").trim();
+    const resultType = String(body.resultType || "MAIN").trim();
+    const dob = String(body.dob || "").trim();
+    const formUrl = String(
+      body.formUrl ||
+        "https://result26.shekhauniexam.in/PG_NEP_RESULT.aspx"
+    ).trim();
+
+    if (!rollNo || !yearPart) {
+      return res.status(400).json({
+        success: false,
+        error: "rollNo and yearPart are required"
+      });
+    }
+
+    const out = await startCaptchaSession({
+      rollNo,
+      yearPart,
+      resultType,
+      formUrl,
+      dob
+    });
+
+    return res.status(200).json({ success: true, ...out });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Could not start CAPTCHA session"
+    });
+  }
+});
+
+app.post("/captcha/submit", requireWorkerSecret, async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    const out = await submitCaptchaSession({
+      sessionId: String(body.sessionId || ""),
+      text: body.text
+    });
+
+    return res.status(200).json({ success: true, ...out });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Could not submit CAPTCHA"
+    });
+  }
+});
+
+app.post("/captcha/close", requireWorkerSecret, async (req, res) => {
+  const out = await closeCaptchaSession(String(req.body?.sessionId || ""));
+
+  return res.status(200).json({ success: true, ...out });
 });
 
 const port = process.env.PORT || 3000;
