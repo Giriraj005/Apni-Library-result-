@@ -325,6 +325,20 @@ export default async function handler(req, res) {
 
     const synced = await syncMissingQueueEntries();
 
+    // Items whose CAPTCHA was solved by a person on the admin page carry a
+    // ready result. Handle those first so alerts go out right away.
+    const manualSnap = await db
+      .collection("result_queue")
+      .where("hasManualResult", "==", true)
+      .limit(BATCH_SIZE)
+      .get();
+
+    const manualDocs = manualSnap.docs.filter((d) =>
+      ["pending", "failed_retrying"].includes(d.data().status)
+    );
+
+    const manualIds = new Set(manualDocs.map((d) => d.id));
+
     const queueSnap = await db
       .collection("result_queue")
       .where("status", "in", ["pending", "failed_retrying"])
@@ -332,7 +346,12 @@ export default async function handler(req, res) {
       .limit(BATCH_SIZE)
       .get();
 
-    if (queueSnap.empty) {
+    const queueDocs = [
+      ...manualDocs,
+      ...queueSnap.docs.filter((d) => !manualIds.has(d.id))
+    ].slice(0, BATCH_SIZE);
+
+    if (!queueDocs.length) {
       return res.status(200).json({
         success: true,
         processed: 0,
@@ -348,7 +367,7 @@ export default async function handler(req, res) {
     let needsCaptcha = 0;
     const results = [];
 
-    for (const doc of queueSnap.docs) {
+    for (const doc of queueDocs) {
       const item = doc.data();
       processed++;
 
@@ -372,13 +391,18 @@ export default async function handler(req, res) {
         const dob =
           registration?.dateOfBirth || item.dateOfBirth || "";
 
-        const workerResult = await fetchResultFromWorker({
-          rollNo: item.rollNo,
-          yearPart: item.yearPart,
-          resultType: item.resultType || "MAIN",
-          formUrl,
-          dob
-        });
+        // A result a person already fetched through the CAPTCHA page wins;
+        // otherwise ask the worker as usual.
+        const workerResult =
+          item.manualWorkerResult && item.manualWorkerResult.resultFound
+            ? item.manualWorkerResult
+            : await fetchResultFromWorker({
+                rollNo: item.rollNo,
+                yearPart: item.yearPart,
+                resultType: item.resultType || "MAIN",
+                formUrl,
+                dob
+              });
 
         // The university form is asking for a CAPTCHA. Retrying can't fix
         // that, and it says nothing about whether the result exists, so park
@@ -534,6 +558,8 @@ export default async function handler(req, res) {
               resultFound: true,
               resultId,
               workerResultStatus: workerResult.resultStatus || "",
+              hasManualResult: false,
+              manualWorkerResult: FieldValue.delete(),
               updatedAt: FieldValue.serverTimestamp()
             },
             { merge: true }
