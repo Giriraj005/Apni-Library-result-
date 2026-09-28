@@ -345,6 +345,7 @@ export default async function handler(req, res) {
     let processed = 0;
     let found = 0;
     let failed = 0;
+    let needsCaptcha = 0;
     const results = [];
 
     for (const doc of queueSnap.docs) {
@@ -378,6 +379,35 @@ export default async function handler(req, res) {
           formUrl,
           dob
         });
+
+        // The university form is asking for a CAPTCHA. Retrying can't fix
+        // that, and it says nothing about whether the result exists, so park
+        // the item instead of retrying or counting it towards MAX_ATTEMPTS.
+        if (workerResult.needsHuman) {
+          await doc.ref.set(
+            {
+              status: "needs_captcha",
+              resultFound: false,
+              attempts: item.attempts || 0,
+              workerResultStatus: workerResult.resultStatus || "",
+              lastError: workerResult.reason || "captcha_required",
+              updatedAt: FieldValue.serverTimestamp()
+            },
+            { merge: true }
+          );
+
+          needsCaptcha++;
+
+          results.push({
+            queueId: doc.id,
+            rollNo: item.rollNo,
+            yearPart: item.yearPart,
+            status: "needs_captcha",
+            reason: workerResult.reason || "captcha_required"
+          });
+
+          continue;
+        }
 
         if (workerResult.resultFound) {
           const resultId = makeResultEventKey({
@@ -647,7 +677,7 @@ export default async function handler(req, res) {
       "queue",
       "info",
       "Queue processing completed with worker",
-      { processed, found, failed, synced, results }
+      { processed, found, failed, needsCaptcha, synced, results }
     );
 
     return res.status(200).json({
@@ -655,6 +685,7 @@ export default async function handler(req, res) {
       processed,
       found,
       failed,
+      needsCaptcha,
       synced,
       results
     });
