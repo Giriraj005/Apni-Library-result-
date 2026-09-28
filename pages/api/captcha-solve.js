@@ -227,7 +227,8 @@ export default async function handler(req, res) {
           state: "awaiting_captcha",
           sessionId: out.sessionId,
           imageBase64: out.imageBase64,
-          fullPage: Boolean(out.fullPage)
+          fullPage: Boolean(out.fullPage),
+          formInfo: out.formInfo || null
         });
       }
 
@@ -259,7 +260,9 @@ export default async function handler(req, res) {
           sessionId: out.sessionId,
           imageBase64: out.imageBase64,
           fullPage: Boolean(out.fullPage),
-          reason: out.reason || ""
+          reason: out.reason || "",
+          pageText: out.pageText || "",
+          formInfo: out.formInfo || null
         });
       }
 
