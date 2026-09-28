@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { randomUUID } from "node:crypto";
 
 /*
  * CAPTCHA handling
@@ -1072,5 +1073,248 @@ export async function fetchResultWithBrowser({
       formUrl,
       durationMs: Date.now() - startedAt
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop CAPTCHA sessions (used by the admin CAPTCHA page)
+//
+// start  -> opens the form, fills it in, keeps the page open, returns the
+//           CAPTCHA image.
+// submit -> a person typed the CAPTCHA; type it into the SAME page (the image
+//           is tied to that page's session), submit, read the result. If the
+//           site rejects it, reload for a fresh CAPTCHA and return that image.
+// Sessions live in memory and close themselves after a few idle minutes.
+// ---------------------------------------------------------------------------
+
+const captchaSessions = new Map();
+const CAPTCHA_SESSION_TTL_MS = 4 * 60 * 1000;
+const MAX_CAPTCHA_SESSIONS = 2;
+
+const BROWSER_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu"
+];
+
+const DESKTOP_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+export async function closeCaptchaSession(sessionId) {
+  const session = captchaSessions.get(sessionId);
+
+  if (!session) return { closed: false };
+
+  captchaSessions.delete(sessionId);
+  clearTimeout(session.timer);
+  await session.browser.close().catch(() => {});
+
+  return { closed: true };
+}
+
+function touchCaptchaSession(session) {
+  clearTimeout(session.timer);
+
+  session.timer = setTimeout(() => {
+    closeCaptchaSession(session.id);
+  }, CAPTCHA_SESSION_TTL_MS);
+}
+
+// Loads a fresh copy of the form (=> a fresh CAPTCHA), fills it, and returns
+// the CAPTCHA image, or null if the page is not asking for one.
+async function prepareCaptchaForm(session) {
+  const { page, params } = session;
+
+  await gotoResultPage(page, params.formUrl);
+
+  if (!session.beforeUrl) session.beforeUrl = page.url();
+
+  session.form = await fillForm(page, params);
+
+  if (!(await hasCaptchaChallenge(page))) return null;
+
+  const image = await readCaptchaImage(page);
+
+  return {
+    imageBase64: image.buffer.toString("base64"),
+    fullPage: image.fullPage
+  };
+}
+
+function buildSessionResult(session, snapshot, clickedSelector) {
+  const { params, form } = session;
+  const { combinedText, status } = snapshot;
+
+  const needsHuman =
+    status.status === "captcha_required" || status.status === "captcha_failed";
+
+  const usefulLines = needsHuman ? [] : extractUsefulLines(combinedText);
+
+  const marksSummary = usefulLines.length
+    ? usefulLines.join("\n")
+    : needsHuman
+    ? ""
+    : combinedText.slice(0, 3500);
+
+  return {
+    success: true,
+    rollNo: params.rollNo,
+    yearPart: params.yearPart,
+    resultType: params.resultType,
+    formUrl: params.formUrl,
+    resultFound: status.resultFound,
+    resultStatus: status.status,
+    reason: status.reason,
+    needsHuman,
+    captcha: {
+      mode: "session",
+      attempts: session.attempts
+    },
+    selected: {
+      beforeUrl: session.beforeUrl,
+      afterUrl: session.page.url(),
+      dropdownSelector: form ? form.yearSelectSelector : "",
+      selectedValue: form ? form.selected.selectedValue : "",
+      selectedLabel: form ? form.selected.selectedLabel : "",
+      resultTypeSelection: form ? form.resultTypeSelection : null,
+      filledRollFields: form ? form.filledRollFields : [],
+      filledDob: form ? form.filledDob : null,
+      clickedSelector
+    },
+    marksSummary,
+    textPreview: combinedText.slice(0, 3500),
+    screenshotBase64: null,
+    durationMs: Date.now() - session.startedAt
+  };
+}
+
+export async function startCaptchaSession({
+  rollNo,
+  yearPart,
+  resultType = "MAIN",
+  formUrl,
+  dob
+}) {
+  while (captchaSessions.size >= MAX_CAPTCHA_SESSIONS) {
+    await closeCaptchaSession(captchaSessions.keys().next().value);
+  }
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: BROWSER_ARGS
+  });
+
+  const session = {
+    id: randomUUID(),
+    browser,
+    page: null,
+    dialogs: [],
+    params: { rollNo, yearPart, resultType, formUrl, dob },
+    form: null,
+    beforeUrl: "",
+    attempts: 1,
+    startedAt: Date.now(),
+    timer: null
+  };
+
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1366, height: 768 },
+      userAgent: DESKTOP_USER_AGENT
+    });
+
+    session.page = await context.newPage();
+    session.page.setDefaultTimeout(60000);
+
+    session.page.on("dialog", (dialog) => {
+      session.dialogs.push(dialog.message());
+      dialog.accept().catch(() => {});
+    });
+
+    await setupFastPage(session.page, { allowImages: true });
+
+    captchaSessions.set(session.id, session);
+    touchCaptchaSession(session);
+
+    const shown = await prepareCaptchaForm(session);
+
+    if (shown) {
+      return {
+        state: "awaiting_captcha",
+        sessionId: session.id,
+        ...shown
+      };
+    }
+
+    // The page did not ask for a CAPTCHA: submit straight away.
+    const clickedSelector = await clickSubmit(session.page);
+    const snapshot = await snapshotPage(
+      session.page,
+      rollNo,
+      session.dialogs
+    );
+    const result = buildSessionResult(session, snapshot, clickedSelector);
+
+    await closeCaptchaSession(session.id);
+
+    return { state: "done", result };
+  } catch (err) {
+    await closeCaptchaSession(session.id);
+    await browser.close().catch(() => {});
+    throw err;
+  }
+}
+
+export async function submitCaptchaSession({ sessionId, text }) {
+  const session = captchaSessions.get(sessionId);
+
+  if (!session) return { state: "expired" };
+
+  const typed = String(text || "").trim();
+
+  if (!typed) {
+    return { state: "error", error: "CAPTCHA text is empty" };
+  }
+
+  touchCaptchaSession(session);
+
+  try {
+    await fillCaptchaField(session.page, typed);
+
+    const clickedSelector = await clickSubmit(session.page);
+
+    const snapshot = await snapshotPage(
+      session.page,
+      session.params.rollNo,
+      session.dialogs
+    );
+
+    const state = snapshot.status.status;
+
+    if (state === "captcha_failed" || state === "captcha_required") {
+      // Rejected: load the form again for a new CAPTCHA, same session.
+      session.attempts += 1;
+
+      const shown = await prepareCaptchaForm(session);
+
+      if (shown) {
+        return {
+          state: "captcha_rejected",
+          sessionId,
+          reason: snapshot.status.reason,
+          ...shown
+        };
+      }
+    }
+
+    const result = buildSessionResult(session, snapshot, clickedSelector);
+
+    await closeCaptchaSession(sessionId);
+
+    return { state: "done", result };
+  } catch (err) {
+    await closeCaptchaSession(sessionId);
+    throw err;
   }
 }
